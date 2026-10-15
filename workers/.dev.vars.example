@@ -1,0 +1,3 @@
+DATABASE_URL=postgresql://<user>:<password>@<new-neon-host>/<database>?sslmode=require
+JWT_SECRET=<generate-a-long-random-secret>
+CORS_ALLOWED_ORIGINS=http://localhost:5173

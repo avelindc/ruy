@@ -1,0 +1,41 @@
+{
+  "name": "breakout-music",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src",
+    "test:auth": "npm --prefix workers run test:auth",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "csv-parse": "^7.0.3",
+    "lucide-react": "^1.55.0",
+    "papaparse": "^5.7.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-hook-form": "^7.90.0",
+    "react-router-dom": "^7.18.4",
+    "recharts": "^3.10.1",
+    "typescript": "^7.0.2",
+    "uuid": "^14.0.3",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "autoprefixer": "^10.6.1",
+    "oxlint": "^1.81.0",
+    "pg": "^8.23.1",
+    "postcss": "^8.5.29",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.0"
+  }
+}

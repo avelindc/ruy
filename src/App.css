@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #7c3aed;
+  --color-secondary: #4f67ff;
+  --color-accent: #a855f7;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #0B0B0E;
+  color: #FFFFFF;
+  overflow-x: clip;
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-5 py-2.5 bg-[#4F67FF] text-white rounded-xl font-bold hover:bg-[#435BFF] transition-all shadow-[0_4px_16px_rgba(79,103,255,0.4)] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer;
+  }
+
+  .btn-secondary {
+    @apply px-5 py-2.5 bg-white/[0.08] text-white border border-white/[0.1] rounded-xl font-semibold hover:bg-white/[0.15] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer;
+  }
+
+  .btn-ghost {
+    @apply px-5 py-2.5 bg-transparent text-indigo-400 rounded-xl font-semibold hover:bg-white/[0.05] transition-colors cursor-pointer;
+  }
+
+  .card {
+    @apply bg-[#14141B] rounded-2xl border border-white/[0.08] shadow-lg text-white;
+  }
+
+  .form-input {
+    @apply w-full px-4 py-2.5 bg-[#181822] border border-white/[0.1] rounded-xl text-white placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all;
+  }
+
+  .form-label {
+    @apply block text-xs font-semibold text-gray-300 mb-1.5;
+  }
+
+  .form-error {
+    @apply text-xs text-rose-400 mt-1;
+  }
+
+  .section-title {
+    @apply text-2xl md:text-3xl font-black text-white tracking-tight;
+  }
+
+  .section-subtitle {
+    @apply text-xs md:text-sm text-gray-400;
+  }
+}
