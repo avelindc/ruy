@@ -1,0 +1,648 @@
+.record-journey {
+  position: relative;
+  height: 360vh;
+  background: #171915;
+  color: #eeece1;
+}
+
+.record-stage {
+  --disc-x: -22px;
+  --disc-y: 0px;
+  --disc-rotation: 0deg;
+  --disc-tilt: 42deg;
+  --sleeve-x: 28px;
+  --sleeve-tilt: -14deg;
+  --scene-tilt: 8deg;
+  --orbit-scale: .78;
+  position: sticky;
+  top: 64px;
+  display: flex;
+  height: calc(100svh - 64px);
+  min-height: 560px;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: clamp(18px, 3vw, 42px) clamp(22px, 7vw, 110px) 19px;
+  background:
+    radial-gradient(ellipse at 71% 51%, rgb(112 72 83 / 15%), transparent 36%),
+    repeating-linear-gradient(0deg, transparent 0, transparent 59px, rgb(234 230 218 / 3%) 60px),
+    #171915;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.record-stage::before {
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: rgb(234 230 218 / 8%);
+  content: '';
+}
+
+.record-stage__topline,
+.record-stage__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #9b9d91;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .17em;
+}
+
+.record-stage__topline {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgb(234 230 218 / 18%);
+}
+
+.record-stage__layout {
+  display: grid;
+  width: min(100%, 1320px);
+  flex: 1;
+  grid-template-columns: minmax(300px, .8fr) minmax(460px, 1.2fr);
+  align-items: center;
+  gap: clamp(20px, 5vw, 80px);
+  margin: 0 auto;
+}
+
+.record-stage__story {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 1fr 25px;
+  align-items: center;
+  gap: 23px;
+}
+
+.record-stage__chapters {
+  position: relative;
+  min-height: 315px;
+}
+
+.record-chapter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(0, 22px, 0);
+  transition: opacity .45s ease, transform .6s cubic-bezier(.2,.7,.2,1);
+}
+
+.record-chapter.is-active {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0);
+}
+
+.record-chapter__marker {
+  margin: 0 0 21px;
+  color: #d0f568;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .17em;
+}
+
+.record-chapter h2 {
+  max-width: 540px;
+  margin: 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(42px, 5.4vw, 76px);
+  font-weight: 400;
+  letter-spacing: -.075em;
+  line-height: .98;
+}
+
+.record-chapter__copy {
+  max-width: 370px;
+  margin: 23px 0 0;
+  color: #b5b6aa;
+  font-size: 13px;
+  line-height: 1.85;
+}
+
+.record-chapter__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 27px;
+  color: #d0f568;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.record-stage__navigation {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  align-items: center;
+}
+
+.record-stage__navigation button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #777a70;
+  cursor: pointer;
+  font: inherit;
+  font-size: 8px;
+  transition: color .2s ease, background .2s ease;
+}
+
+.record-stage__navigation button.is-active {
+  background: #d0f568;
+  color: #171915;
+  font-weight: 800;
+}
+
+.record-stage__progress {
+  position: absolute;
+  z-index: 0;
+  top: 12px;
+  bottom: 12px;
+  left: 50%;
+  width: 1px;
+  background: rgb(234 230 218 / 20%);
+  transform: translateX(-50%);
+}
+
+.record-stage__progress span {
+  display: block;
+  width: 1px;
+  height: 100%;
+  background: #d0f568;
+  transform: scaleY(.2);
+  transform-origin: top;
+  transition: transform .5s ease;
+}
+
+.record-art {
+  position: relative;
+  width: min(100%, 720px);
+  aspect-ratio: 1.2;
+  justify-self: center;
+  perspective: 1300px;
+  transform: rotate(var(--scene-tilt));
+  transform-style: preserve-3d;
+  transition: transform .5s ease-out;
+}
+
+.record-art__orbit {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border: 1px solid rgb(219 218 195 / 13%);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) rotateX(69deg) rotateZ(-23deg) scale(var(--orbit-scale));
+  transition: transform .3s linear;
+}
+
+.record-art__orbit--outer {
+  width: 105%;
+  aspect-ratio: 1;
+}
+
+.record-art__orbit--inner {
+  width: 77%;
+  aspect-ratio: 1;
+  border-style: dashed;
+  opacity: .55;
+}
+
+.record-art__ground {
+  position: absolute;
+  right: 3%;
+  bottom: 11%;
+  left: 3%;
+  height: 22%;
+  border-radius: 50%;
+  background: #0a0b09;
+  filter: blur(22px);
+  transform: rotateX(70deg) translateZ(-55px);
+}
+
+.record-sleeve,
+.record-disc {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(56%, 370px);
+  aspect-ratio: 1;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.record-sleeve {
+  z-index: 2;
+  overflow: hidden;
+  background: #76444e;
+  box-shadow: 22px 24px 45px rgb(0 0 0 / 48%), inset 0 0 0 1px rgb(255 255 255 / 25%);
+  transform: translate3d(calc(-50% + var(--sleeve-x)), -50%, 36px) rotateY(var(--sleeve-tilt)) rotateZ(-4deg);
+  transition: transform .28s linear;
+}
+
+.record-sleeve::after {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgb(255 255 255 / 22%);
+  content: '';
+  pointer-events: none;
+}
+
+.record-sleeve__photo {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(180deg, rgb(20 20 17 / 2%) 25%, rgb(20 20 17 / 78%) 100%), url('/images/hero-singer.jpg');
+  background-position: center 42%;
+  background-size: cover;
+  filter: grayscale(1) sepia(.2) contrast(1.08);
+  mix-blend-mode: screen;
+  opacity: .62;
+}
+
+.record-sleeve__label {
+  position: absolute;
+  right: 22px;
+  bottom: 19px;
+  left: 22px;
+  display: flex;
+  flex-direction: column;
+  color: #f3efe2;
+}
+
+.record-sleeve__label span,
+.record-sleeve__label small {
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: .16em;
+}
+
+.record-sleeve__label strong {
+  margin: 7px 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(24px, 3vw, 40px);
+  font-weight: 400;
+  letter-spacing: -.07em;
+  line-height: .86;
+}
+
+.record-sleeve__label small {
+  color: #d0f568;
+  font-size: 7px;
+}
+
+.record-sleeve__spine {
+  position: absolute;
+  top: 12px;
+  right: 13px;
+  color: rgb(244 240 227 / 72%);
+  font-size: 6px;
+  font-weight: 750;
+  letter-spacing: .18em;
+  writing-mode: vertical-rl;
+}
+
+.record-disc {
+  z-index: 3;
+  overflow: hidden;
+  border: 1px solid rgb(243 241 226 / 32%);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, transparent 0 17%, #1b1d19 17.3% 21%, transparent 21.4%),
+    repeating-radial-gradient(circle, #242621 0 1px, #141612 1.4px 3.3px, #20221e 3.6px 4.2px),
+    #171915;
+  box-shadow: 13px 23px 38px rgb(0 0 0 / 55%), inset -11px -7px 24px rgb(0 0 0 / 50%), inset 4px 4px 13px rgb(255 255 255 / 7%);
+  transform: translate3d(calc(-50% + var(--disc-x)), calc(-50% + var(--disc-y)), 4px) rotateX(var(--disc-tilt)) rotateZ(var(--disc-rotation));
+  transition: transform .18s linear;
+}
+
+.record-disc__grooves {
+  position: absolute;
+  inset: 9%;
+  border: 1px solid rgb(224 225 212 / 13%);
+  border-radius: 50%;
+  background: repeating-radial-gradient(circle, transparent 0 5px, rgb(222 224 210 / 12%) 5.4px 5.7px, transparent 6px 9px);
+  box-shadow: inset 0 0 18px rgb(0 0 0 / 90%);
+}
+
+.record-disc__label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  width: 30%;
+  aspect-ratio: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #b8cb62;
+  color: #1a1c17;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.record-disc__label span,
+.record-disc__label small {
+  font-size: clamp(5px, .7vw, 8px);
+  font-weight: 800;
+  letter-spacing: .11em;
+}
+
+.record-disc__label strong {
+  margin: 5px 0;
+  font-size: clamp(8px, 1.15vw, 14px);
+  letter-spacing: -.06em;
+  line-height: .88;
+}
+
+.record-disc__label small {
+  font-size: clamp(4px, .55vw, 6px);
+}
+
+.record-disc__hole {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #1b1c18;
+  box-shadow: 0 0 0 1px rgb(245 241 227 / 35%);
+  transform: translate(-50%, -50%);
+}
+
+.record-arm {
+  position: absolute;
+  z-index: 4;
+  top: 16%;
+  right: 17%;
+  width: 31%;
+  aspect-ratio: 1;
+  transform: rotate(12deg) translateZ(60px);
+  transform-style: preserve-3d;
+}
+
+.record-arm__pivot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 19%;
+  aspect-ratio: 1;
+  border: 4px solid #a9aaa1;
+  border-radius: 50%;
+  background: #282a25;
+  box-shadow: 3px 5px 8px rgb(0 0 0 / 45%);
+}
+
+.record-arm__bar {
+  position: absolute;
+  top: 9%;
+  right: 12%;
+  width: 5px;
+  height: 76%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #777a72, #e1dfd2 48%, #888a80);
+  box-shadow: 2px 4px 6px rgb(0 0 0 / 55%);
+  transform: rotate(-42deg);
+  transform-origin: top center;
+}
+
+.record-arm__needle {
+  position: absolute;
+  right: 69%;
+  bottom: 2%;
+  width: 13px;
+  height: 24px;
+  border-radius: 2px 2px 5px 5px;
+  background: #d0d0c3;
+  box-shadow: 2px 3px 6px rgb(0 0 0 / 55%);
+  transform: rotate(-42deg);
+}
+
+.record-arm__needle::after {
+  position: absolute;
+  right: 2px;
+  bottom: -4px;
+  width: 2px;
+  height: 9px;
+  background: #c8f05a;
+  content: '';
+}
+
+.record-art__annotation {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #c2c3b9;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .14em;
+}
+
+.record-art__annotation i {
+  display: block;
+  width: 44px;
+  height: 1px;
+  background: #d0f568;
+}
+
+.record-art__annotation--top {
+  top: 14%;
+  left: 2%;
+}
+
+.record-art__annotation--bottom {
+  right: 0;
+  bottom: 12%;
+}
+
+.record-stage__footer {
+  padding-top: 12px;
+  border-top: 1px solid rgb(234 230 218 / 18%);
+  font-size: 8px;
+}
+
+@media (max-width: 900px) {
+  .record-stage {
+    padding-right: 28px;
+    padding-left: 28px;
+  }
+
+  .record-stage__layout {
+    grid-template-columns: minmax(260px, .95fr) minmax(300px, 1.05fr);
+    gap: 12px;
+  }
+
+  .record-chapter h2 {
+    font-size: clamp(38px, 6.3vw, 58px);
+  }
+
+  .record-art {
+    width: 115%;
+    margin-left: -8%;
+  }
+
+  .record-sleeve,
+  .record-disc {
+    width: min(65%, 330px);
+  }
+}
+
+@media (max-width: 680px) {
+  .record-journey {
+    height: 410vh;
+  }
+
+  .record-stage {
+    min-height: 580px;
+    padding: 15px 18px 14px;
+  }
+
+  .record-stage__topline,
+  .record-stage__footer {
+    font-size: 7px;
+    letter-spacing: .1em;
+  }
+
+  .record-stage__layout {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0;
+    padding: 13px 0 7px;
+  }
+
+  .record-stage__story {
+    width: 100%;
+    min-height: 37%;
+    grid-template-columns: minmax(0, 1fr) 24px;
+    gap: 10px;
+  }
+
+  .record-stage__chapters {
+    width: 100%;
+    min-height: 225px;
+  }
+
+  .record-chapter {
+    justify-content: flex-start;
+    padding-top: 8px;
+  }
+
+  .record-chapter__marker {
+    margin-bottom: 13px;
+    font-size: 8px;
+  }
+
+  .record-chapter h2 {
+    max-width: 380px;
+    font-size: clamp(36px, 10vw, 56px);
+  }
+
+  .record-chapter__copy {
+    max-width: 340px;
+    margin-top: 13px;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+
+  .record-chapter__cta {
+    margin-top: 13px;
+    font-size: 10px;
+  }
+
+  .record-stage__navigation {
+    gap: 7px;
+  }
+
+  .record-stage__navigation button {
+    width: 22px;
+    height: 22px;
+    font-size: 7px;
+  }
+
+  .record-art {
+    width: min(112%, 490px);
+    flex: 1;
+    min-height: 250px;
+    margin: -13px 0 0 -6%;
+  }
+
+  .record-sleeve,
+  .record-disc {
+    width: min(65%, 270px);
+  }
+
+  .record-sleeve__label {
+    right: 15px;
+    bottom: 14px;
+    left: 15px;
+  }
+
+  .record-sleeve__label strong {
+    font-size: clamp(24px, 8vw, 34px);
+  }
+
+  .record-art__annotation--top {
+    top: 8%;
+  }
+
+  .record-art__annotation--bottom {
+    bottom: 8%;
+  }
+
+  .record-arm {
+    top: 12%;
+    right: 8%;
+  }
+}
+
+@media (max-height: 650px) and (min-width: 681px) {
+  .record-stage {
+    min-height: 0;
+    height: calc(100svh - 64px);
+    padding-top: 11px;
+    padding-bottom: 10px;
+  }
+
+  .record-stage__layout {
+    grid-template-columns: minmax(260px, .9fr) minmax(350px, 1.1fr);
+  }
+
+  .record-stage__chapters {
+    min-height: 260px;
+  }
+
+  .record-chapter h2 {
+    font-size: clamp(36px, 4.5vw, 60px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .record-chapter,
+  .record-disc,
+  .record-sleeve,
+  .record-art,
+  .record-art__orbit,
+  .record-stage__progress span {
+    scroll-behavior: auto;
+    transition: none !important;
+  }
+}
