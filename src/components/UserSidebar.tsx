@@ -79,43 +79,61 @@ export default function UserSidebar({ open, onToggle }: UserSidebarProps) {
 
       {/* Mobile Sidebar */}
       {open && (
-        <aside className="md:hidden fixed inset-0 z-40 bg-white border-r border-gray-200 w-64 overflow-y-auto">
-          <div className="h-16 flex items-center px-4 border-b border-gray-200">
-            <span className="font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
-              BREAKOUT
-            </span>
-          </div>
-
-          <nav className="px-4 py-6">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = location.pathname === item.href;
-              return (
-                <Link
-                  key={item.href}
-                  to={item.href}
+        <>
+          <div
+            className="md:hidden fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            onClick={onToggle}
+            aria-hidden="true"
+          />
+          <aside className="md:hidden fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 w-64 max-w-[85vw] flex flex-col justify-between overflow-y-auto shadow-2xl">
+            <div>
+              <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
+                <span className="font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
+                  BREAKOUT
+                </span>
+                <button
                   onClick={onToggle}
-                  className={`flex items-center space-x-3 px-4 py-3 rounded-lg mb-2 transition ${
-                    isActive
-                      ? 'bg-purple-100 text-purple-600'
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
+                  className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500"
+                  aria-label="Tutup menu"
                 >
-                  <Icon size={20} />
-                  <span className="text-sm font-medium">{item.label}</span>
-                </Link>
-              );
-            })}
-          </nav>
+                  <ChevronLeft size={20} />
+                </button>
+              </div>
 
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center space-x-3 px-4 py-3 text-gray-600 hover:bg-gray-100 transition"
-          >
-            <LogOut size={20} />
-            <span className="text-sm font-medium">Logout</span>
-          </button>
-        </aside>
+              <nav className="px-4 py-6">
+                {menuItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = location.pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      to={item.href}
+                      onClick={onToggle}
+                      className={`flex items-center space-x-3 px-4 py-3 rounded-lg mb-2 transition ${
+                        isActive
+                          ? 'bg-purple-100 text-purple-600'
+                          : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <Icon size={20} />
+                      <span className="text-sm font-medium">{item.label}</span>
+                    </Link>
+                  );
+                })}
+              </nav>
+            </div>
+
+            <div className="p-4 border-t border-gray-200">
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center space-x-3 px-4 py-3 text-gray-600 hover:bg-gray-100 rounded-lg transition"
+              >
+                <LogOut size={20} />
+                <span className="text-sm font-medium">Logout</span>
+              </button>
+            </div>
+          </aside>
+        </>
       )}
     </>
   );

@@ -87,6 +87,76 @@ test('R2 upload path streams the master file after checking its content signatur
   assert.equal((await response.json()).data.storageProvider, 'cloudflare-r2');
 });
 
+test('master audio upload without R2 binding returns 503 and strictly rejects Neon DB fallback', async () => {
+  const form = new FormData();
+  form.set('type', 'audio');
+  form.set('file', new File([new Uint8Array([0x49, 0x44, 0x33, 0, 0, 0, 0, 0, 0, 0, 0, 0])], 'master.mp3', { type: 'audio/mpeg' }));
+  const env = { JWT_SECRET: secret }; // No STORAGE_BUCKET or R2_BUCKET
+  const response = await handleUpload(new Request('https://api.example.test/api/uploads', {
+    method: 'POST', headers: { Authorization: `Bearer ${jwt(artistId)}` }, body: form,
+  }), env, sessionAdapter(artistId), {});
+  assert.equal(response.status, 503);
+  const data = await response.json();
+  assert.equal(data.success, false);
+  assert.match(data.error, /Cloudflare R2 belum aktif/);
+});
+
+test('storage get with download=true sets attachment Content-Disposition header', async () => {
+  const fileKey = `covers/${artistId}/artwork.jpg`;
+  const env = {
+    JWT_SECRET: secret,
+    STORAGE_BUCKET: {
+      async get(key) {
+        return key === fileKey ? {
+          body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+          size: 4,
+          httpMetadata: { contentType: 'image/jpeg' },
+        } : null;
+      },
+    },
+  };
+  const response = await handleStorageGet(
+    request('/api/storage/covers?download=true', 'GET'),
+    env,
+    sessionAdapter(artistId),
+    {},
+    fileKey
+  );
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-disposition'), /^attachment; filename=/);
+});
+
+test('private report file requires ownership or admin authorization and denies unauthenticated access', async () => {
+  const fileKey = `reports/${artistId}/statement-2026.pdf`;
+  const env = {
+    JWT_SECRET: secret,
+    STORAGE_BUCKET: {
+      async get(key) {
+        return key === fileKey ? {
+          body: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+          size: 4,
+          httpMetadata: { contentType: 'application/pdf' },
+        } : null;
+      },
+    },
+  };
+  // Anonymous access rejected
+  const anon = await handleStorageGet(request('/api/storage/report', 'GET'), env, sessionAdapter(artistId), {}, fileKey);
+  assert.equal(anon.status, 401);
+
+  // Other user rejected
+  const other = await handleStorageGet(request('/api/storage/report', 'GET', jwt('11111111-2222-3333-4444-555555555555')), env, sessionAdapter(artistId), {}, fileKey);
+  assert.equal(other.status, 403);
+
+  // Owner allowed
+  const owner = await handleStorageGet(request('/api/storage/report', 'GET', jwt(artistId)), env, sessionAdapter(artistId), {}, fileKey);
+  assert.equal(owner.status, 200);
+
+  // Admin allowed
+  const admin = await handleStorageGet(request('/api/storage/report', 'GET', jwt(adminId, 'admin')), env, sessionAdapter(adminId, 'admin'), {}, fileKey);
+  assert.equal(admin.status, 200);
+});
+
 test('release submission verifies ownership, rights acknowledgement, and persistent file presence', async () => {
   const user = { ...sessionAdapter(artistId) };
   const release = {

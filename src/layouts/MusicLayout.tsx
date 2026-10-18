@@ -125,7 +125,7 @@ export default function MusicLayout() {
   };
 
   return (
-    <div className="h-screen w-screen bg-[#131417] text-white overflow-hidden flex flex-row font-sans relative">
+    <div className="h-screen w-full max-w-full bg-[#131417] text-white overflow-hidden flex flex-row font-sans relative">
       {/* Hidden Native Audio Element for Real Playback */}
       <audio
         ref={audioRef}

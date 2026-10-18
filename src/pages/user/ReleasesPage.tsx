@@ -840,7 +840,7 @@ export default function ReleasesPage() {
               </div>
             )}
 
-            <form onSubmit={handleFinalSubmit} className="space-y-5 text-xs">
+            <form onSubmit={handleFinalSubmit} className="space-y-5 text-sm sm:text-xs">
               {/* Row 1: Title & Release Type */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="sm:col-span-2 space-y-1.5">
@@ -851,7 +851,7 @@ export default function ReleasesPage() {
                     placeholder="Contoh: Satu Rasa (Single)"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
 
@@ -860,7 +860,7 @@ export default function ReleasesPage() {
                   <select
                     value={releaseType}
                     onChange={(e: any) => setReleaseType(e.target.value)}
-                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   >
                     <option value="single">Single</option>
                     <option value="ep">EP</option>
@@ -892,7 +892,7 @@ export default function ReleasesPage() {
                     placeholder="Masukkan nama artis/band baru..."
                     value={artistName}
                     onChange={(e) => setArtistName(e.target.value)}
-                    className="w-full bg-[#161622] border border-indigo-500/40 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#161622] border border-indigo-500/40 rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   />
                 ) : (
                   <select
@@ -902,7 +902,7 @@ export default function ReleasesPage() {
                       const art = userArtists.find(a => a.id === e.target.value);
                       if (art) setArtistName(art.name);
                     }}
-                    className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   >
                     {userArtists.length > 0 ? (
                       userArtists.map((art) => (
@@ -922,7 +922,7 @@ export default function ReleasesPage() {
                   <select
                     value={genre}
                     onChange={(e) => setGenre(e.target.value)}
-                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   >
                     {genresList.map((g) => (
                       <option key={g} value={g}>{g}</option>
@@ -937,7 +937,7 @@ export default function ReleasesPage() {
                     required
                     value={releaseDate}
                     onChange={(e) => setReleaseDate(e.target.value)}
-                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
@@ -951,7 +951,7 @@ export default function ReleasesPage() {
                     placeholder="Pisahkan beberapa nama dengan koma"
                     value={composers}
                     onChange={(e) => setComposers(e.target.value)}
-                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -962,7 +962,7 @@ export default function ReleasesPage() {
                     placeholder="Pisahkan beberapa nama dengan koma"
                     value={producers}
                     onChange={(e) => setProducers(e.target.value)}
-                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
@@ -982,7 +982,7 @@ export default function ReleasesPage() {
                 <p className="text-[11px] text-gray-400">
                   Tentukan bagian terbaik lagu (chorus/hook) yang akan otomatis menjadi sound default di TikTok dan Instagram Reels.
                 </p>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <span className="text-[10px] text-gray-500 block mb-1">Mulai Dari (Menit:Detik)</span>
                     <input
@@ -990,7 +990,7 @@ export default function ReleasesPage() {
                       placeholder="00:30"
                       value={tiktokStart}
                       onChange={(e) => setTiktokStart(e.target.value)}
-                      className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3.5 py-2 text-white font-mono"
+                      className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3.5 py-2 text-base sm:text-xs text-white font-mono"
                     />
                   </div>
                   <div>
@@ -998,7 +998,7 @@ export default function ReleasesPage() {
                     <select
                       value={tiktokDuration}
                       onChange={(e) => setTiktokDuration(e.target.value)}
-                      className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3.5 py-2 text-white font-mono"
+                      className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3.5 py-2 text-base sm:text-xs text-white font-mono"
                     >
                       <option value="30s">30 Detik</option>
                       <option value="60s">60 Detik</option>
@@ -1207,7 +1207,7 @@ export default function ReleasesPage() {
                   placeholder="Contoh: ID-XXX-26-00001"
                   value={isrc}
                   onChange={(e) => setIsrc(e.target.value)}
-                  className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white font-mono"
+                  className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white font-mono"
                 />
               </div>
 

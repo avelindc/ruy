@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { BarChart3, Users, Music, Disc3, List, FileText, TrendingUp, DollarSign, CreditCard, History, Globe, Coins } from 'lucide-react';
+import { BarChart3, Users, Music, Disc3, List, FileText, TrendingUp, DollarSign, CreditCard, History, Globe, Coins, LogOut } from 'lucide-react';
 
 import { useAuth } from '@contexts/AuthContext';
 

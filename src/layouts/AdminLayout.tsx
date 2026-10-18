@@ -20,7 +20,7 @@ export default function AdminLayout() {
   const isOverview = location.pathname === '/admin';
 
   return (
-    <div className="h-screen w-screen bg-[#131417] text-white overflow-hidden flex flex-row font-sans relative">
+    <div className="h-screen w-full max-w-full bg-[#131417] text-white overflow-hidden flex flex-row font-sans relative">
       {/* 1. Mobile Backdrop */}
       {mobileMenuOpen && (
         <div

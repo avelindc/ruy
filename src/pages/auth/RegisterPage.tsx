@@ -95,7 +95,7 @@ export default function RegisterPage() {
             <input
               type="text"
               placeholder="Nama lengkap atau nama panggung"
-              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
+              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-base sm:text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
               disabled={isLoading}
               {...register('full_name')}
             />
@@ -110,7 +110,7 @@ export default function RegisterPage() {
             <input
               type="email"
               placeholder="nama@email.com"
-              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
+              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-base sm:text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
               disabled={isLoading}
               {...register('email')}
             />
@@ -125,7 +125,7 @@ export default function RegisterPage() {
             <input
               type="password"
               placeholder="Minimal 8 karakter"
-              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
+              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-base sm:text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
               disabled={isLoading}
               {...register('password')}
             />
@@ -140,7 +140,7 @@ export default function RegisterPage() {
             <input
               type="password"
               placeholder="Ulangi kata sandi"
-              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
+              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-base sm:text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
               disabled={isLoading}
               {...register('confirm_password')}
             />

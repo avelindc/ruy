@@ -305,7 +305,7 @@ export default function MusicHomePage() {
           {/* ---------------------------------------------------------------------
               TOP WIDE CARD ("My cards" / User Release Showcase + Real Transactions)
              --------------------------------------------------------------------- */}
-          <div className="bg-[#1c1d23] border border-white/[0.04] rounded-[28px] p-6 sm:p-7 shadow-xl">
+          <div className="bg-[#1c1d23] border border-white/[0.04] rounded-[28px] p-4 sm:p-7 shadow-xl overflow-hidden max-w-full">
             {/* Header row */}
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
@@ -327,7 +327,7 @@ export default function MusicHomePage() {
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
 
               {/* LEFT HALF: Overlapping Stylized Release Cards (Visually Consistent with Admin) */}
-              <div className="md:col-span-6 flex items-center justify-center py-2">
+              <div className="md:col-span-6 flex items-center justify-center py-2 overflow-hidden max-w-full pr-2">
                 <div
                   onClick={() => navigate('/dashboard/withdrawals')}
                   onKeyDown={(e) => {
@@ -339,11 +339,11 @@ export default function MusicHomePage() {
                   role="button"
                   tabIndex={0}
                   title="Buka Dompet & Penarikan Saldo"
-                  className="relative w-full max-w-[290px] h-[175px] cursor-pointer group focus:outline-none focus:ring-2 focus:ring-[#FF6A3D]/50 rounded-[24px]"
+                  className="relative w-full max-w-[280px] sm:max-w-[290px] h-[175px] cursor-pointer group focus:outline-none focus:ring-2 focus:ring-[#FF6A3D]/50 rounded-[24px]"
                 >
 
                   {/* Back Card (Orange Glow Accent Card) */}
-                  <div className="absolute right-0 top-3 w-[88%] h-[155px] rounded-[22px] bg-gradient-to-tr from-[#FF6A3D] to-[#FF8C61] shadow-[0_12px_28px_rgba(255,106,61,0.3)] opacity-95 transform translate-x-3 translate-y-1 overflow-hidden p-4 flex flex-col justify-between transition-transform duration-300 group-hover:translate-x-3.5 group-hover:translate-y-1.5">
+                  <div className="absolute right-0 top-3 w-[88%] h-[155px] rounded-[22px] bg-gradient-to-tr from-[#FF6A3D] to-[#FF8C61] shadow-[0_12px_28px_rgba(255,106,61,0.3)] opacity-95 transform translate-x-2 sm:translate-x-3 translate-y-1 overflow-hidden p-4 flex flex-col justify-between transition-transform duration-300 group-hover:translate-x-2.5 sm:group-hover:translate-x-3.5 group-hover:translate-y-1.5">
                     <div className="flex justify-between items-center text-white/90">
                       <span className="text-[11px] font-bold tracking-wider">Breakout Pass</span>
                       <Radio className="w-4 h-4 text-white/80" />

@@ -102,7 +102,7 @@ export default function LoginPage() {
             <input
               type="email"
               placeholder="nama@email.com"
-              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
+              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-base sm:text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
               disabled={isLoading}
               {...register('email')}
             />
@@ -122,7 +122,7 @@ export default function LoginPage() {
             <input
               type="password"
               placeholder="••••••••"
-              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
+              className="w-full bg-[#161824] border border-white/[0.1] rounded-xl text-base sm:text-xs text-white pl-10 pr-4 py-2.5 placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition-all"
               disabled={isLoading}
               {...register('password')}
             />

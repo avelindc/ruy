@@ -36,7 +36,7 @@ const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f
 
 export function getStorageOwnerId(fileKey: string): string | null {
   const parts = fileKey.replace(/^\/+/, '').split('/');
-  if (!['audio', 'covers'].includes(parts[0] || '')) return null;
+  if (!['audio', 'covers', 'reports'].includes(parts[0] || '')) return null;
   if (USER_ID_PATTERN.test(parts[1] || '')) return parts[1];
   const legacy = (parts[1] || '').match(/^([0-9a-f-]{36})-\d+-/i);
   return legacy && USER_ID_PATTERN.test(legacy[1]) ? legacy[1] : null;
@@ -91,11 +91,13 @@ export async function handleStorageSign(
     const authContext = await requireAuth(request, env, adapter);
     const body = await request.json() as { fileKey?: string };
     const fileKey = String(body.fileKey || '').replace(/^\/+/, '');
-    if (!fileKey.startsWith('audio/') || fileKey.includes('..')) throw new ValidationError('A valid private audio file key is required.');
+    if ((!fileKey.startsWith('audio/') && !fileKey.startsWith('reports/')) || fileKey.includes('..')) {
+      throw new ValidationError('A valid private file key is required.');
+    }
     const ownerId = getStorageOwnerId(fileKey);
-    if (!ownerId) throw new NotFoundError('Audio file not found.');
+    if (!ownerId) throw new NotFoundError('File not found.');
     await requireOwnership(authContext, ownerId, adapter);
-    if (!(await checkStorageObjectExists(env, adapter, fileKey))) throw new NotFoundError('Audio file not found.');
+    if (!(await checkStorageObjectExists(env, adapter, fileKey))) throw new NotFoundError('File not found.');
     const secret = env.JWT_SECRET?.trim();
     if (!secret) throw new Error('Private media signing is not configured.');
     const expires = Math.floor(Date.now() / 1000) + SIGNED_MEDIA_TTL_SECONDS;
@@ -133,7 +135,7 @@ export async function handleUpload(
 
   const formData = await request.formData();
   const file = formData.get('file');
-  const uploadType = (formData.get('type') as string) || 'artwork'; // 'artwork' | 'cover' | 'audio'
+  const uploadType = (formData.get('type') as string) || 'artwork'; // 'artwork' | 'cover' | 'audio' | 'report' | 'csv' | 'archive'
 
   if (!file || typeof file === 'string') {
     throw new ValidationError('File is required in "file" field');
@@ -147,6 +149,7 @@ export async function handleUpload(
   // Validate MIME and size
   const isImage = uploadType === 'artwork' || uploadType === 'cover';
   const isAudio = uploadType === 'audio';
+  const isReport = uploadType === 'report' || uploadType === 'csv' || uploadType === 'archive';
 
   if (isImage) {
     const validImageMimes = ['image/jpeg', 'image/png', 'image/webp'];
@@ -185,13 +188,21 @@ export async function handleUpload(
     if (fileSize > 150 * 1024 * 1024) {
       throw new ValidationError('Ukuran file audio maksimal 150MB');
     }
+  } else if (isReport) {
+    const hasValidReportExt = !!fileName.match(/\.(csv|pdf|xlsx|xls|txt|json)$/i);
+    if (!hasValidReportExt) {
+      throw new ValidationError('File laporan arsip harus berformat CSV, PDF, XLSX, TXT, atau JSON.');
+    }
+    if (fileSize > 50 * 1024 * 1024) {
+      throw new ValidationError('Ukuran file laporan maksimal 50MB.');
+    }
   } else {
-    throw new ValidationError('Invalid upload type. Must be "artwork", "cover", or "audio"');
+    throw new ValidationError('Invalid upload type. Must be "artwork", "cover", "audio", or "report"');
   }
 
   // Generate clean storage key
   const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const prefix = isImage ? 'covers/' : 'audio/';
+  const prefix = isImage ? 'covers/' : isAudio ? 'audio/' : 'reports/';
   const fileKey = `${prefix}${authContext.userId}/${crypto.randomUUID()}-${safeName}`;
 
   const signatureBytes = new Uint8Array(await fileBlob.slice(0, 12).arrayBuffer());
@@ -228,12 +239,23 @@ export async function handleUpload(
         storedInR2 = true;
       }
     } catch (r2Err) {
-      console.warn('R2 storage attempt failed, attempting verified database storage fallback:', r2Err);
+      console.warn('R2 storage attempt failed:', r2Err);
     }
   }
 
   // Attempt Storage 2: Database chunk storage fallback (Neon DB temp_upload_chunks)
+  // Audio files MUST be stored in Cloudflare R2; never stored permanently in database.
   if (!storedInR2) {
+    if (isAudio) {
+      return jsonResponse(
+        {
+          success: false,
+          error: 'Cloudflare R2 belum aktif atau tidak dapat diakses. File audio master wajib disimpan di Cloudflare R2 dan tidak diizinkan disimpan di database Neon.',
+        },
+        503,
+        headers,
+      );
+    }
     if (fileSize > 8 * 1024 * 1024) {
       return jsonResponse(
         { success: false, error: 'R2 belum tersedia; penyimpanan fallback database dibatasi 8MB per file. Hubungi admin untuk konfigurasi storage.' },
@@ -326,18 +348,22 @@ export async function handleStorageGet(
   fileKey: string
 ): Promise<Response> {
   const decodedKey = decodeURIComponent(fileKey).split('?')[0].split('#')[0];
-  const privateAudio = decodedKey.startsWith('audio/');
-  if (privateAudio && !(await isValidStorageSignature(request, env, decodedKey))) {
+  const isPrivate = decodedKey.startsWith('audio/') || decodedKey.startsWith('reports/');
+  if (isPrivate && !(await isValidStorageSignature(request, env, decodedKey))) {
     try {
       const authContext = await requireAuth(request, env, adapter);
       const ownerId = getStorageOwnerId(decodedKey);
-      if (!ownerId) throw new NotFoundError('Audio file not found.');
+      if (!ownerId) throw new NotFoundError('File not found.');
       await requireOwnership(authContext, ownerId, adapter);
     } catch (error) {
       return jsonResponse(handleError(error), getStatusCode(error), headers);
     }
   }
   const rangeHeader = request.headers.get('range');
+  const requestUrl = new URL(request.url);
+  const isDownload = requestUrl.searchParams.get('download') === 'true' || requestUrl.searchParams.get('download') === '1' || fileKey.startsWith('download/');
+  const rawFilename = decodedKey.split('/').pop() || 'download';
+  const cleanFilename = rawFilename.replace(/^[0-9a-f-]{36}-/i, '');
 
   // Determine MIME type by file extension
   let mimeType = 'application/octet-stream';
@@ -351,6 +377,10 @@ export async function handleStorageGet(
   else if (decodedKey.match(/\.aac$/i)) mimeType = 'audio/aac';
   else if (decodedKey.match(/\.flac$/i)) mimeType = 'audio/flac';
   else if (decodedKey.match(/\.ogg$/i)) mimeType = 'audio/ogg';
+  else if (decodedKey.match(/\.csv$/i)) mimeType = 'text/csv';
+  else if (decodedKey.match(/\.pdf$/i)) mimeType = 'application/pdf';
+  else if (decodedKey.match(/\.xlsx$/i)) mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  else if (decodedKey.match(/\.json$/i)) mimeType = 'application/json';
 
   // 1. Try Cloudflare R2 bucket first (if configured and bound)
   const r2Bucket = env.STORAGE_BUCKET || env.R2_BUCKET;
@@ -361,7 +391,8 @@ export async function handleStorageGet(
         const objHeaders = new Headers(headers);
         objHeaders.set('Content-Type', obj.httpMetadata?.contentType || mimeType);
         objHeaders.set('Accept-Ranges', 'bytes');
-        objHeaders.set('Cache-Control', privateAudio ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
+        objHeaders.set('Cache-Control', isPrivate ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
+        objHeaders.set('Content-Disposition', isDownload ? `attachment; filename="${cleanFilename}"` : `inline; filename="${cleanFilename}"`);
         if (obj.httpEtag) objHeaders.set('ETag', obj.httpEtag);
 
         if (rangeHeader && 'range' in obj && obj.range) {
@@ -420,7 +451,8 @@ export async function handleStorageGet(
           resHeaders.set('Content-Length', String(slicedBytes.byteLength));
           resHeaders.set('Content-Range', `bytes ${start}-${end}/${totalSize}`);
           resHeaders.set('Accept-Ranges', 'bytes');
-          resHeaders.set('Cache-Control', privateAudio ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
+          resHeaders.set('Cache-Control', isPrivate ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
+          resHeaders.set('Content-Disposition', isDownload ? `attachment; filename="${cleanFilename}"` : `inline; filename="${cleanFilename}"`);
 
           return new Response(slicedBytes, { status: 206, headers: resHeaders });
         }
@@ -430,7 +462,8 @@ export async function handleStorageGet(
         resHeaders.set('Content-Type', mimeType);
         resHeaders.set('Content-Length', String(totalSize));
         resHeaders.set('Accept-Ranges', 'bytes');
-        resHeaders.set('Cache-Control', privateAudio ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
+        resHeaders.set('Cache-Control', isPrivate ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
+        resHeaders.set('Content-Disposition', isDownload ? `attachment; filename="${cleanFilename}"` : `inline; filename="${cleanFilename}"`);
 
         return new Response(bytes, { status: 200, headers: resHeaders });
       }
