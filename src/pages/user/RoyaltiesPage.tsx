@@ -165,10 +165,10 @@ export default function RoyaltiesPage() {
           id: entry.id,
           track_title: title,
           release_type: '',
-          artist_name: '',
+          artist_name: entry.artist_name || '',
           release_title: title,
           isrc: entry.track?.isrc || entry.isrc || '',
-          platform: 'Royalty agregat',
+          platform: entry.source === 'manual_artist_royalty' ? 'Royalti Artis' : 'Royalty agregat',
           platforms_list: [],
           streams: Number(entry.streams || 0),
           royalty_usd: Number(entry.amount || 0),
@@ -178,7 +178,8 @@ export default function RoyaltiesPage() {
           cover_url: '',
         };
       });
-      setRecords(calculationRows.length ? calculationRows : legacyRows);
+      const manualArtistRows = legacyRows.filter((row: any) => row.platform === 'Royalti Artis');
+      setRecords(calculationRows.length ? [...calculationRows, ...manualArtistRows] : legacyRows);
     } catch (err) {
       console.error('Error loading royalty reports:', err);
       setErrorMessage('Gagal memuat laporan royalti. Silakan periksa koneksi atau coba lagi nanti.');

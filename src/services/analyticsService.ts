@@ -31,6 +31,18 @@ export async function getStreamingRecords(userId: string, startDate?: string, en
   }
 }
 
+/** Artist-level manual reports are fetched separately from track streaming to avoid double counting. */
+export async function getArtistStreamingAggregates(_userId: string) {
+  try {
+    const result = await apiGet<any>('/api/streaming/aggregates?limit=500');
+    if (!result.success) throw new Error(result.error || 'Failed to fetch artist streaming reports');
+    return { data: result.data?.data || [], error: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch artist streaming reports';
+    return { data: [], error: new Error(message) };
+  }
+}
+
 /**
  * Get streaming stats by period
  */

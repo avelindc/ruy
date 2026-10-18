@@ -42,6 +42,7 @@ import CatalogManagement from '@pages/admin/CatalogManagement';
 import CSVImportPage from '@pages/admin/CSVImportPage';
 import StreamingReportsPage from '@pages/admin/StreamingReportsPage';
 import RoyaltiesManagement from '@pages/admin/RoyaltiesManagement';
+import StreamingRoyaltyManagement from '@pages/admin/StreamingRoyaltyManagement';
 import WithdrawalsManagement from '@pages/admin/WithdrawalsManagement';
 import TransactionsManagement from '@pages/admin/TransactionsManagement';
 import AuditLogsPage from '@pages/admin/AuditLogsPage';
@@ -153,6 +154,7 @@ function AppRoutes() {
         <Route path="/admin/catalog" element={<CatalogManagement />} />
         <Route path="/admin/csv-import" element={<CSVImportPage />} />
         <Route path="/admin/streaming-reports" element={<StreamingReportsPage />} />
+        <Route path="/admin/streaming-royalty" element={<StreamingRoyaltyManagement />} />
         <Route path="/admin/royalties" element={<RoyaltiesManagement />} />
         <Route path="/admin/withdrawals" element={<WithdrawalsManagement />} />
         <Route path="/admin/transactions" element={<TransactionsManagement />} />

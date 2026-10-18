@@ -336,5 +336,3 @@ BEGIN
   RETURN v_batch_id;
 END;
 $$;
-
-\n

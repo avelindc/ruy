@@ -207,6 +207,99 @@ export interface StreamingFilter {
   offset?: number;
 }
 
+export interface ArtistStreamingAggregate {
+  id: string;
+  artist_id: string;
+  artist_name: string;
+  owner_id: string;
+  owner_email?: string;
+  account_artist_id?: string;
+  platform: string;
+  period_start: string;
+  period_end: string;
+  streams: number;
+  territory?: string;
+  gross_revenue?: string | number;
+  currency?: string;
+  report_identifier?: string;
+  notes?: string;
+  source: 'manual' | 'csv';
+  version: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArtistStreamingAggregateInput {
+  artist_id: string;
+  platform: string;
+  period_start: string;
+  period_end: string;
+  streams: number;
+  territory?: string;
+  gross_revenue?: string | number | null;
+  currency?: string | null;
+  report_identifier?: string | null;
+  notes?: string | null;
+}
+
+export interface ArtistStreamingAggregateFilter {
+  artist_id?: string;
+  owner_id?: string;
+  platform?: string;
+  start_date?: string;
+  end_date?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ManualArtistRoyalty {
+  id: string;
+  artist_id: string;
+  artist_name: string;
+  owner_id: string;
+  owner_email?: string;
+  account_artist_id?: string;
+  period_start: string;
+  period_end: string;
+  streams?: number;
+  gross_revenue?: string | number;
+  deductions: string | number;
+  net_royalty: string | number;
+  currency: string;
+  status: 'draft' | 'finalized' | 'superseded';
+  report_identifier?: string;
+  notes?: string;
+  supersedes_id?: string;
+  revision: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ManualArtistRoyaltyInput {
+  artist_id: string;
+  period_start: string;
+  period_end: string;
+  streams?: number | null;
+  gross_revenue?: string | number | null;
+  deductions: string | number;
+  net_royalty: string | number;
+  currency: string;
+  status: 'draft' | 'finalized';
+  report_identifier?: string | null;
+  notes?: string | null;
+}
+
+export interface ManualArtistRoyaltyFilter {
+  artist_id?: string;
+  owner_id?: string;
+  start_date?: string;
+  end_date?: string;
+  include_superseded?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 // ============================================================================
 // ROYALTY TYPES
 // ============================================================================
@@ -462,6 +555,13 @@ export interface DatabaseAdapter {
   createStreamingRecord(data: StreamingRecord): Promise<StreamingRecord>;
   createStreamingRecords(data: StreamingRecord[]): Promise<StreamingRecord[]>;
   getStreamingByPeriod(artistId: string, startDate: string, endDate: string): Promise<StreamingRecord[]>;
+  listArtistFinanceArtists(): Promise<Array<{ id: string; artist_name: string; owner_id: string; owner_email: string; account_artist_id?: string }>>;
+  listArtistStreamingAggregates(filters: ArtistStreamingAggregateFilter): Promise<{ data: ArtistStreamingAggregate[]; total: number }>;
+  createArtistStreamingAggregate(data: ArtistStreamingAggregateInput, actorId: string): Promise<ArtistStreamingAggregate>;
+  correctArtistStreamingAggregate(id: string, data: ArtistStreamingAggregateInput, actorId: string): Promise<ArtistStreamingAggregate>;
+  listManualArtistRoyalties(filters: ManualArtistRoyaltyFilter): Promise<{ data: ManualArtistRoyalty[]; total: number }>;
+  createManualArtistRoyalty(data: ManualArtistRoyaltyInput, actorId: string): Promise<ManualArtistRoyalty>;
+  correctManualArtistRoyalty(id: string, data: Omit<ManualArtistRoyaltyInput, 'artist_id'>, actorId: string, reason: string): Promise<ManualArtistRoyalty>;
 
   // ========== ROYALTY OPERATIONS ==========
   getRoyalties(artistId: string, limit?: number, offset?: number): Promise<{ data: RoyaltyEntry[]; total: number }>;

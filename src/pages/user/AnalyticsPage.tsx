@@ -10,7 +10,7 @@ import {
   Tooltip
 } from 'recharts';
 import type { StreamingRecordItem } from '@services/distributionSyncService';
-import { getStreamingRecords as fetchApiStreaming } from '@services/analyticsService';
+import { getStreamingRecords as fetchApiStreaming, getArtistStreamingAggregates } from '@services/analyticsService';
 import { getRoyaltyEntries } from '@services/royaltiesService';
 import { useAuth } from '@contexts/AuthContext';
 
@@ -20,6 +20,7 @@ export default function AnalyticsPage() {
 
   // State
   const [records, setRecords] = useState<StreamingRecordItem[]>([]);
+  const [artistStreamingReports, setArtistStreamingReports] = useState<any[]>([]);
   const [royaltyEntries, setRoyaltyEntries] = useState<any[]>([]);
   const [, setLoading] = useState(true);
   const [selectedPlatform, setSelectedPlatform] = useState<'All' | 'Spotify' | 'YouTube' | 'Apple Music'>('All');
@@ -35,12 +36,14 @@ export default function AnalyticsPage() {
 
       let apiStreaming: any[] = [];
       if (user?.id) {
-        const [streaming, royalties] = await Promise.all([
+        const [streaming, royalties, artistReports] = await Promise.all([
           fetchApiStreaming(user.id),
           getRoyaltyEntries(user.id),
+          getArtistStreamingAggregates(user.id),
         ]);
         apiStreaming = streaming.data || [];
         if (!royalties.error) setRoyaltyEntries(royalties.data || []);
+        if (!artistReports.error) setArtistStreamingReports(artistReports.data || []);
       }
 
       const mappedApiStreaming: StreamingRecordItem[] = apiStreaming.map((s: any) => ({
@@ -173,6 +176,23 @@ export default function AnalyticsPage() {
 
   return (
     <div className="text-white font-sans w-full max-w-[1600px] mx-auto space-y-6">
+
+      <section className="rounded-[28px] border border-white/[0.05] bg-[#1c1d23] p-5 shadow-xl sm:p-6">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">Laporan streaming per artis</h2>
+            <p className="mt-1 text-xs text-[#8E92A0]">Laporan agregat admin ditampilkan terpisah dari rincian per track dan tidak dijumlahkan ke grafik track.</p>
+          </div>
+          <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-[#A7AAB5]">{artistStreamingReports.length} laporan</span>
+        </div>
+        {artistStreamingReports.length === 0 ? <p className="rounded-xl border border-white/[0.05] bg-black/10 p-4 text-sm text-[#8E92A0]">Belum ada laporan streaming agregat untuk akun ini.</p> :
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px] text-left text-sm">
+              <thead><tr className="border-b border-white/[0.06] text-xs uppercase tracking-wide text-[#777C89]"><th className="py-3 pr-4">Artis</th><th className="py-3 pr-4">Platform / wilayah</th><th className="py-3 pr-4">Periode</th><th className="py-3 pr-4">Streaming</th><th className="py-3">Pendapatan sumber</th></tr></thead>
+              <tbody>{artistStreamingReports.map((report: any) => <tr key={report.id} className="border-b border-white/[0.04] last:border-0"><td className="py-3 pr-4 font-medium text-white">{report.artist_name}</td><td className="py-3 pr-4 text-[#A7AAB5]">{report.platform}{report.territory ? ` · ${report.territory}` : ''}</td><td className="py-3 pr-4 text-[#A7AAB5]">{report.period_start} — {report.period_end}</td><td className="py-3 pr-4 font-mono text-white">{Number(report.streams || 0).toLocaleString()}</td><td className="py-3 text-[#A7AAB5]">{report.gross_revenue == null ? 'Tidak dilaporkan' : `${report.currency} ${Number(report.gross_revenue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</td></tr>)}</tbody>
+            </table>
+          </div>}
+      </section>
 
       {/* =========================================================================
           MAIN ASYMMETRIC GRID

@@ -94,6 +94,11 @@ export default {
         return handleTracks(request, env, adapter, headers);
       }
 
+      if (pathname === '/api/streaming/aggregates') {
+        const { handleArtistStreamingAggregates } = await import('./handlers/artistFinanceHandler');
+        return handleArtistStreamingAggregates(request, env, adapter, headers);
+      }
+
       if (pathname.startsWith('/api/streaming')) {
         return handleStreaming(request, env, adapter, headers);
       }
@@ -134,6 +139,10 @@ export default {
 
       // Admin endpoints (require admin role)
       if (pathname.startsWith('/api/admin/')) {
+        if (pathname.startsWith('/api/admin/artist-finance/')) {
+          const { handleAdminArtistFinance } = await import('./handlers/artistFinanceHandler');
+          return handleAdminArtistFinance(request, env, adapter, headers);
+        }
         if (pathname === '/api/admin/dashboard-stats') {
           const { handleAdminDashboardStats } = await import('./handlers/adminHandler');
           return handleAdminDashboardStats(request, adapter, headers, env);
@@ -772,7 +781,38 @@ export async function handleRoyalties(
         if (startDate && endDate) return adapter.getRoyaltiesByPeriod(artistId, startDate, endDate);
         return (await adapter.getRoyalties(artistId, 500, 0)).data;
       }));
-      const records = perArtist.flat().sort((a, b) => b.reporting_period.localeCompare(a.reporting_period));
+      const records = perArtist.flat();
+      const manualRoyalties = await adapter.listManualArtistRoyalties({
+        artist_id: requestedArtistId && requestedArtistId !== authContext.userId ? requestedArtistId : undefined,
+        owner_id: isAdmin ? undefined : authContext.userId,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+        include_superseded: false,
+        limit: 500,
+        offset: 0,
+      });
+      records.push(...manualRoyalties.data
+        .filter((entry) => isAdmin || entry.status === 'finalized')
+        .map((entry) => ({
+          id: entry.id,
+          owner_id: entry.owner_id,
+          artist_id: entry.artist_id,
+          artist_name: entry.artist_name,
+          song_name: `Royalti Artis: ${entry.artist_name} (${entry.period_start.slice(0, 7)})`,
+          streams: entry.streams,
+          amount: Number(entry.net_royalty),
+          gross_revenue: entry.gross_revenue == null ? undefined : Number(entry.gross_revenue),
+          deductions: Number(entry.deductions),
+          net_revenue: Number(entry.net_royalty),
+          currency: entry.currency,
+          reporting_period: entry.period_start,
+          royalty_type: 'other' as const,
+          status: entry.status === 'draft' ? 'estimated' as const : 'finalized' as const,
+          created_at: entry.created_at,
+          source: 'manual_artist_royalty',
+          report_identifier: entry.report_identifier,
+        })));
+      records.sort((a, b) => b.reporting_period.localeCompare(a.reporting_period));
       const result = { data: records.slice(offset, offset + limit), total: records.length };
 
       return jsonResponse(

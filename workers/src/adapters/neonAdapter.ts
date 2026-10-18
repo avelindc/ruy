@@ -21,6 +21,12 @@ import type {
   TrackInput,
   StreamingRecord,
   StreamingFilter,
+  ArtistStreamingAggregate,
+  ArtistStreamingAggregateInput,
+  ArtistStreamingAggregateFilter,
+  ManualArtistRoyalty,
+  ManualArtistRoyaltyInput,
+  ManualArtistRoyaltyFilter,
   RoyaltyEntry,
   AuditLog,
   AuditLogFilter,
@@ -1039,6 +1045,256 @@ export class NeonAdapter implements DatabaseAdapter {
     const trackIsrcMap = Object.fromEntries(tracksResult.rows.map((r) => [r.id, r.isrc]));
 
     return streamingResult.rows.map((row) => transformNeonStreaming(row, trackIsrcMap[row.trackId]));
+  }
+
+  async listArtistFinanceArtists(): Promise<Array<{ id: string; artist_name: string; owner_id: string; owner_email: string; account_artist_id?: string }>> {
+    const result = await this.client.query(`
+      SELECT DISTINCT a.id, a."stageName" AS artist_name, a."userId" AS owner_id,
+        u.email AS owner_email, u.artist_id AS account_artist_id
+      FROM public."Artist" a
+      JOIN public.users u ON u.id = a."userId"
+      WHERE EXISTS (SELECT 1 FROM public."Release" r WHERE r."artistId" = a.id)
+      ORDER BY a."stageName", a.id
+    `);
+    return result.rows.map((row) => ({
+      id: row.id, artist_name: row.artist_name, owner_id: row.owner_id,
+      owner_email: row.owner_email, account_artist_id: row.account_artist_id || undefined,
+    }));
+  }
+
+  async listArtistStreamingAggregates(filters: ArtistStreamingAggregateFilter): Promise<{ data: ArtistStreamingAggregate[]; total: number }> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    const add = (sql: string, value: unknown) => { params.push(value); clauses.push(sql.replace('?', `$${params.length}`)); };
+    if (filters.artist_id) add('s."artistId" = ?::uuid', filters.artist_id);
+    if (filters.owner_id) add('a."userId" = ?::uuid', filters.owner_id);
+    if (filters.platform) add('lower(s.platform) = lower(?)', filters.platform);
+    if (filters.start_date) add('s."periodEnd" >= ?::date', filters.start_date);
+    if (filters.end_date) add('s."periodStart" <= ?::date', filters.end_date);
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const from = `FROM public."ArtistStreamingAggregate" s
+      JOIN public."Artist" a ON a.id = s."artistId"
+      JOIN public.users u ON u.id = a."userId"`;
+    const count = await this.client.query(`SELECT COUNT(*)::int AS total ${from} ${where}`, params);
+    const limit = Math.min(Math.max(filters.limit || 100, 1), 500);
+    const offset = Math.max(filters.offset || 0, 0);
+    const result = await this.client.query(`
+      SELECT s.*, a."stageName" AS "artistName", a."userId" AS "ownerId",
+        u.email AS "ownerEmail", u.artist_id AS "accountArtistId"
+      ${from} ${where}
+      ORDER BY s."periodStart" DESC, s."createdAt" DESC, s.id
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `, [...params, limit, offset]);
+    return { data: result.rows.map((row) => this.mapArtistStreamingAggregate(row)), total: Number(count.rows[0]?.total || 0) };
+  }
+
+  async createArtistStreamingAggregate(data: ArtistStreamingAggregateInput, actorId: string): Promise<ArtistStreamingAggregate> {
+    const result = await this.client.query(`
+      WITH inserted AS (
+        INSERT INTO public."ArtistStreamingAggregate" (
+          "artistId", platform, "periodStart", "periodEnd", streams, territory,
+          "grossRevenue", currency, "reportIdentifier", notes, source, "createdBy", "updatedBy"
+        )
+        SELECT a.id, $2, $3::date, $4::date, $5::bigint, $6, $7::numeric, $8, $9, $10, 'manual', $11::uuid, $11::uuid
+        FROM public."Artist" a
+        WHERE a.id = $1::uuid
+          AND EXISTS (SELECT 1 FROM public."Release" r WHERE r."artistId" = a.id)
+        RETURNING *
+      ), audit AS (
+        INSERT INTO public."AuditLog" ("actorId", action, "entityType", "entityId", metadata)
+        SELECT $11::uuid, 'ARTIST_STREAMING_CREATED', 'ArtistStreamingAggregate', i.id, jsonb_build_object('after', to_jsonb(i))
+        FROM inserted i
+      )
+      SELECT i.*, a."stageName" AS "artistName", a."userId" AS "ownerId",
+        u.email AS "ownerEmail", u.artist_id AS "accountArtistId"
+      FROM inserted i JOIN public."Artist" a ON a.id = i."artistId"
+      JOIN public.users u ON u.id = a."userId"
+    `, [data.artist_id, data.platform, data.period_start, data.period_end, data.streams,
+      data.territory || null, data.gross_revenue ?? null, data.currency || null,
+      data.report_identifier || null, data.notes || null, actorId]);
+    if (!result.rows[0]) throw new NotFoundError('Artist with a catalog release was not found.');
+    return this.mapArtistStreamingAggregate(result.rows[0]);
+  }
+
+  async correctArtistStreamingAggregate(id: string, data: ArtistStreamingAggregateInput, actorId: string): Promise<ArtistStreamingAggregate> {
+    const result = await this.client.query(`
+      WITH previous AS (
+        SELECT * FROM public."ArtistStreamingAggregate" WHERE id = $1::uuid FOR UPDATE
+      ), updated AS (
+        UPDATE public."ArtistStreamingAggregate" s SET
+          "artistId" = $2::uuid, platform = $3, "periodStart" = $4::date, "periodEnd" = $5::date,
+          streams = $6::bigint, territory = $7, "grossRevenue" = $8::numeric, currency = $9,
+          "reportIdentifier" = $10, notes = $11, "updatedBy" = $12::uuid,
+          version = s.version + 1, "updatedAt" = now()
+        FROM previous p
+        WHERE s.id = p.id
+          AND EXISTS (SELECT 1 FROM public."Release" r WHERE r."artistId" = $2::uuid)
+        RETURNING s.*
+      ), audit AS (
+        INSERT INTO public."AuditLog" ("actorId", action, "entityType", "entityId", metadata)
+        SELECT $12::uuid, 'ARTIST_STREAMING_CORRECTED', 'ArtistStreamingAggregate', u.id,
+          jsonb_build_object('before', to_jsonb(p), 'after', to_jsonb(u))
+        FROM previous p JOIN updated u ON u.id = p.id
+      )
+      SELECT u.*, a."stageName" AS "artistName", a."userId" AS "ownerId",
+        users.email AS "ownerEmail", users.artist_id AS "accountArtistId"
+      FROM updated u JOIN public."Artist" a ON a.id = u."artistId"
+      JOIN public.users ON users.id = a."userId"
+    `, [id, data.artist_id, data.platform, data.period_start, data.period_end, data.streams,
+      data.territory || null, data.gross_revenue ?? null, data.currency || null,
+      data.report_identifier || null, data.notes || null, actorId]);
+    if (!result.rows[0]) throw new NotFoundError('Streaming report or catalog artist was not found.');
+    return this.mapArtistStreamingAggregate(result.rows[0]);
+  }
+
+  async listManualArtistRoyalties(filters: ManualArtistRoyaltyFilter): Promise<{ data: ManualArtistRoyalty[]; total: number }> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    const add = (sql: string, value: unknown) => { params.push(value); clauses.push(sql.replace('?', `$${params.length}`)); };
+    if (filters.artist_id) add('r."artistId" = ?::uuid', filters.artist_id);
+    if (filters.owner_id) add('a."userId" = ?::uuid', filters.owner_id);
+    if (filters.start_date) add('r."periodEnd" >= ?::date', filters.start_date);
+    if (filters.end_date) add('r."periodStart" <= ?::date', filters.end_date);
+    if (!filters.include_superseded) clauses.push("r.status <> 'superseded'");
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const from = `FROM public."ManualArtistRoyalty" r
+      JOIN public."Artist" a ON a.id = r."artistId"
+      JOIN public.users u ON u.id = a."userId"`;
+    const count = await this.client.query(`SELECT COUNT(*)::int AS total ${from} ${where}`, params);
+    const limit = Math.min(Math.max(filters.limit || 100, 1), 500);
+    const offset = Math.max(filters.offset || 0, 0);
+    const result = await this.client.query(`
+      SELECT r.*, a."stageName" AS "artistName", a."userId" AS "ownerId",
+        u.email AS "ownerEmail", u.artist_id AS "accountArtistId"
+      ${from} ${where}
+      ORDER BY r."periodStart" DESC, r."createdAt" DESC, r.id
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `, [...params, limit, offset]);
+    return { data: result.rows.map((row) => this.mapManualArtistRoyalty(row)), total: Number(count.rows[0]?.total || 0) };
+  }
+
+  async createManualArtistRoyalty(data: ManualArtistRoyaltyInput, actorId: string): Promise<ManualArtistRoyalty> {
+    const result = await this.client.query(`
+      WITH inserted AS (
+        INSERT INTO public."ManualArtistRoyalty" (
+          "artistId", "periodStart", "periodEnd", streams, "grossRevenue", deductions,
+          "netRoyalty", currency, status, "reportIdentifier", notes, "createdBy"
+        )
+        SELECT a.id, $2::date, $3::date, $4::bigint, $5::numeric, $6::numeric,
+          $7::numeric, $8, $9, $10, $11, $12::uuid
+        FROM public."Artist" a
+        WHERE a.id = $1::uuid AND EXISTS (SELECT 1 FROM public."Release" rel WHERE rel."artistId" = a.id)
+        RETURNING *
+      ), ledger AS (
+        INSERT INTO public."FinancialLedgerEntry" (
+          "userId", "artistId", "entryType", amount, currency, "referenceType", "referenceId",
+          "idempotencyKey", description, metadata, "createdBy"
+        )
+        SELECT a."userId", i."artistId", 'royalty_credit', i."netRoyalty", i.currency,
+          'manual_artist_royalty', i.id, 'manual-artist-royalty:' || i.id::text,
+          'Finalized manual artist royalty', jsonb_build_object('periodStart', i."periodStart", 'periodEnd', i."periodEnd"), $12::uuid
+        FROM inserted i JOIN public."Artist" a ON a.id = i."artistId"
+        WHERE i.status = 'finalized' AND i."netRoyalty" > 0
+        ON CONFLICT ("idempotencyKey") DO NOTHING
+        RETURNING id
+      ), audit AS (
+        INSERT INTO public."AuditLog" ("actorId", action, "entityType", "entityId", metadata)
+        SELECT $12::uuid, 'MANUAL_ARTIST_ROYALTY_CREATED', 'ManualArtistRoyalty', i.id,
+          jsonb_build_object('after', to_jsonb(i), 'ledgerCreditCreated', i.status = 'finalized' AND i."netRoyalty" > 0)
+        FROM inserted i
+      )
+      SELECT i.*, a."stageName" AS "artistName", a."userId" AS "ownerId",
+        u.email AS "ownerEmail", u.artist_id AS "accountArtistId"
+      FROM inserted i JOIN public."Artist" a ON a.id = i."artistId"
+      JOIN public.users u ON u.id = a."userId"
+    `, [data.artist_id, data.period_start, data.period_end, data.streams ?? null,
+      data.gross_revenue ?? null, data.deductions, data.net_royalty, data.currency,
+      data.status, data.report_identifier || null, data.notes || null, actorId]);
+    if (!result.rows[0]) throw new NotFoundError('Artist with a catalog release was not found.');
+    return this.mapManualArtistRoyalty(result.rows[0]);
+  }
+
+  async correctManualArtistRoyalty(id: string, data: Omit<ManualArtistRoyaltyInput, 'artist_id'>, actorId: string, reason: string): Promise<ManualArtistRoyalty> {
+    const result = await this.client.query(`
+      WITH previous AS (
+        SELECT * FROM public."ManualArtistRoyalty" WHERE id = $1::uuid AND status <> 'superseded' FOR UPDATE
+      ), superseded AS (
+        UPDATE public."ManualArtistRoyalty" r SET status = 'superseded'
+        FROM previous p WHERE r.id = p.id RETURNING r.id
+      ), inserted AS (
+        INSERT INTO public."ManualArtistRoyalty" (
+          "artistId", "periodStart", "periodEnd", streams, "grossRevenue", deductions,
+          "netRoyalty", currency, status, "reportIdentifier", notes, "supersedesId", revision, "createdBy"
+        )
+        SELECT p."artistId", $2::date, $3::date, $4::bigint, $5::numeric, $6::numeric,
+          $7::numeric, $8, $9, $10, $11, p.id, p.revision + 1, $13::uuid
+        FROM previous p JOIN superseded s ON s.id = p.id
+        RETURNING *
+      ), reversal AS (
+        INSERT INTO public."FinancialLedgerEntry" (
+          "userId", "artistId", "entryType", amount, currency, "referenceType", "referenceId",
+          "idempotencyKey", description, metadata, "createdBy"
+        )
+        SELECT a."userId", p."artistId", 'adjustment_credit', -p."netRoyalty", p.currency,
+          'manual_artist_royalty_reversal', p.id, 'manual-artist-royalty-reversal:' || p.id::text,
+          'Reversal for corrected manual artist royalty', jsonb_build_object('correctionReason', $12), $13::uuid
+        FROM previous p JOIN public."Artist" a ON a.id = p."artistId"
+        WHERE p.status = 'finalized' AND p."netRoyalty" > 0
+        ON CONFLICT ("idempotencyKey") DO NOTHING
+        RETURNING id
+      ), credit AS (
+        INSERT INTO public."FinancialLedgerEntry" (
+          "userId", "artistId", "entryType", amount, currency, "referenceType", "referenceId",
+          "idempotencyKey", description, metadata, "createdBy"
+        )
+        SELECT a."userId", i."artistId", 'royalty_credit', i."netRoyalty", i.currency,
+          'manual_artist_royalty', i.id, 'manual-artist-royalty:' || i.id::text,
+          'Corrected finalized manual artist royalty', jsonb_build_object('supersedesId', i."supersedesId"), $13::uuid
+        FROM inserted i JOIN public."Artist" a ON a.id = i."artistId"
+        WHERE i.status = 'finalized' AND i."netRoyalty" > 0
+        ON CONFLICT ("idempotencyKey") DO NOTHING
+        RETURNING id
+      ), audit AS (
+        INSERT INTO public."AuditLog" ("actorId", action, "entityType", "entityId", metadata)
+        SELECT $13::uuid, 'MANUAL_ARTIST_ROYALTY_CORRECTED', 'ManualArtistRoyalty', i.id,
+          jsonb_build_object('before', to_jsonb(p), 'after', to_jsonb(i), 'reason', $12)
+        FROM inserted i JOIN previous p ON p.id = i."supersedesId"
+      )
+      SELECT i.*, a."stageName" AS "artistName", a."userId" AS "ownerId",
+        u.email AS "ownerEmail", u.artist_id AS "accountArtistId"
+      FROM inserted i JOIN public."Artist" a ON a.id = i."artistId"
+      JOIN public.users u ON u.id = a."userId"
+    `, [id, data.period_start, data.period_end, data.streams ?? null,
+      data.gross_revenue ?? null, data.deductions, data.net_royalty, data.currency,
+      data.status, data.report_identifier || null, data.notes || null, reason, actorId]);
+    if (!result.rows[0]) throw new NotFoundError('Royalty entry cannot be corrected because it was not found or is already superseded.');
+    return this.mapManualArtistRoyalty(result.rows[0]);
+  }
+
+  private mapArtistStreamingAggregate(row: any): ArtistStreamingAggregate {
+    return {
+      id: row.id, artist_id: row.artistId, artist_name: row.artistName || '', owner_id: row.ownerId,
+      owner_email: row.ownerEmail || undefined, account_artist_id: row.accountArtistId || undefined,
+      platform: row.platform, period_start: String(row.periodStart).slice(0, 10), period_end: String(row.periodEnd).slice(0, 10),
+      streams: Number(row.streams), territory: row.territory || undefined,
+      gross_revenue: row.grossRevenue == null ? undefined : String(row.grossRevenue), currency: row.currency || undefined,
+      report_identifier: row.reportIdentifier || undefined, notes: row.notes || undefined, source: row.source,
+      version: Number(row.version), created_by: row.createdBy, created_at: row.createdAt, updated_at: row.updatedAt,
+    };
+  }
+
+  private mapManualArtistRoyalty(row: any): ManualArtistRoyalty {
+    return {
+      id: row.id, artist_id: row.artistId, artist_name: row.artistName || '', owner_id: row.ownerId,
+      owner_email: row.ownerEmail || undefined, account_artist_id: row.accountArtistId || undefined,
+      period_start: String(row.periodStart).slice(0, 10), period_end: String(row.periodEnd).slice(0, 10),
+      streams: row.streams == null ? undefined : Number(row.streams),
+      gross_revenue: row.grossRevenue == null ? undefined : String(row.grossRevenue),
+      deductions: String(row.deductions), net_royalty: String(row.netRoyalty), currency: row.currency,
+      status: row.status, report_identifier: row.reportIdentifier || undefined,
+      notes: row.notes || undefined, supersedes_id: row.supersedesId || undefined,
+      revision: Number(row.revision), created_by: row.createdBy, created_at: row.createdAt,
+    };
   }
 
   // ========== ROYALTY OPERATIONS ==========

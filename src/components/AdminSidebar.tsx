@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { BarChart3, Users, Music, Disc3, List, FileText, TrendingUp, DollarSign, CreditCard, History, LogOut, Globe } from 'lucide-react';
+import { BarChart3, Users, Music, Disc3, List, FileText, TrendingUp, DollarSign, CreditCard, History, Globe, Coins } from 'lucide-react';
 
 import { useAuth } from '@contexts/AuthContext';
 
@@ -18,6 +18,7 @@ export default function AdminSidebar() {
     { label: 'Overview', href: '/admin', icon: BarChart3 },
     { label: 'Website CMS', href: '/admin/cms', icon: Globe },
     { label: 'Streaming Analytics', href: '/admin/streaming-reports', icon: TrendingUp },
+    { label: 'Streaming & Royalty', href: '/admin/streaming-royalty', icon: Coins },
     { label: 'Katalog Musik', href: '/admin/catalog', icon: List },
     { label: 'Music Review (Releases)', href: '/admin/releases', icon: Disc3 },
     { label: 'Users Management', href: '/admin/users', icon: Users },
