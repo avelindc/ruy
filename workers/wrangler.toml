@@ -6,7 +6,7 @@ workers_dev = true
 
 [vars]
 ENVIRONMENT = "production"
-CORS_ALLOWED_ORIGINS = "https://<YOUR_CLOUDFLARE_PAGES_DOMAIN>"
+CORS_ALLOWED_ORIGINS = "https://ruy-771.pages.dev"
 
 [env.development]
 name = "breakout-music-api-v2-dev"

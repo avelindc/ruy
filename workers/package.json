@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --config ./wrangler.toml --env development",
-    "deploy": "wrangler deploy --config ./wrangler.toml",
+    "deploy": "wrangler deploy --config ./wrangler.toml --env=\"\"",
     "migrate": "node ./scripts/migrate.mjs",
     "provision:admin": "node ./scripts/provision-admin.mjs",
     "build": "tsc",
