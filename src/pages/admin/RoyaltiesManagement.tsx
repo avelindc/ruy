@@ -1,4 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Coins, Settings } from 'lucide-react';
 import { apiGet, apiPost } from '@lib/api/client';
 
 interface ArtistOption { id: string; artist_name: string }
@@ -87,13 +89,31 @@ export default function RoyaltiesManagement() {
   };
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-8 space-y-6">
+      {/* Navigation Tabs between Actual Input and Rule Setup */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 pb-3">
+        <Link
+          to="/admin/streaming-royalty"
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-600 hover:text-purple-600 hover:bg-purple-50 transition-all"
+        >
+          <Coins className="w-4 h-4 text-purple-500" />
+          <span>Input Streaming &amp; Royalty (Aktual)</span>
+        </Link>
+        <Link
+          to="/admin/royalties"
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-purple-600 text-white shadow-sm transition-all"
+        >
+          <Settings className="w-4 h-4 text-white" />
+          <span>Konfigurasi Aturan Royalti (Rule Setup)</span>
+        </Link>
+      </div>
+
       <header>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Royalties Management</h1>
-        <p className="text-gray-500">Configure an explicit artist share before processing a validated streaming report. No default rate or currency conversion is applied.</p>
+        <h1 className="text-2xl font-black text-gray-900 tracking-tight mb-1">Konfigurasi Aturan Royalti</h1>
+        <p className="text-xs text-gray-500">Atur persentase bagi hasil artis per platform sebelum memproses laporan streaming validasi. Tidak ada tarif default otomatis tanpa aturan resmi.</p>
       </header>
-      {error && <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-red-700">{error}</div>}
-      {notice && <div role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-emerald-800">{notice}</div>}
+      {error && <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-red-700 text-sm">{error}</div>}
+      {notice && <div role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-emerald-800 text-sm">{notice}</div>}
 
       <section className="card p-6">
         <h2 className="mb-4 text-xl font-semibold">Configure royalty rule</h2>

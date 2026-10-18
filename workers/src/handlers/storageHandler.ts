@@ -89,14 +89,18 @@ export async function handleStorageSign(
 ): Promise<Response> {
   try {
     const authContext = await requireAuth(request, env, adapter);
-    const body = await request.json() as { fileKey?: string };
-    const fileKey = String(body.fileKey || '').replace(/^\/+/, '');
-    if ((!fileKey.startsWith('audio/') && !fileKey.startsWith('reports/')) || fileKey.includes('..')) {
-      throw new ValidationError('A valid private file key is required.');
+    const body = await request.json() as { fileKey?: string; download?: boolean };
+    const rawKey = String(body.fileKey || '').replace(/^\/+/, '');
+    const fileKey = rawKey.includes('/api/storage/')
+      ? decodeURIComponent(rawKey.split('/api/storage/')[1]).split('?')[0].split('#')[0]
+      : rawKey.split('?')[0].split('#')[0];
+
+    if ((!fileKey.startsWith('audio/') && !fileKey.startsWith('reports/') && !fileKey.startsWith('covers/')) || fileKey.includes('..')) {
+      throw new ValidationError('A valid storage file key is required.');
     }
     const ownerId = getStorageOwnerId(fileKey);
-    if (!ownerId) throw new NotFoundError('File not found.');
-    await requireOwnership(authContext, ownerId, adapter);
+    if (!ownerId && (fileKey.startsWith('audio/') || fileKey.startsWith('reports/'))) throw new NotFoundError('File not found.');
+    if (ownerId) await requireOwnership(authContext, ownerId, adapter);
     if (!(await checkStorageObjectExists(env, adapter, fileKey))) throw new NotFoundError('File not found.');
     const secret = env.JWT_SECRET?.trim();
     if (!secret) throw new Error('Private media signing is not configured.');
@@ -105,6 +109,9 @@ export async function handleStorageSign(
     const url = new URL(`/api/storage/${encodeURIComponent(fileKey)}`, request.url);
     url.searchParams.set('expires', String(expires));
     url.searchParams.set('signature', signature);
+    if (body.download) {
+      url.searchParams.set('download', 'true');
+    }
     return jsonResponse({ success: true, data: { url: url.toString(), expires_at: new Date(expires * 1000).toISOString() } }, 200, headers);
   } catch (error) {
     return jsonResponse(handleError(error), getStatusCode(error), headers);
@@ -481,6 +488,7 @@ async function checkStorageObjectExists(env: StorageEnv, adapter: DatabaseAdapte
   if (key.includes('/api/storage/')) {
     key = decodeURIComponent(key.split('/api/storage/')[1]);
   }
+  key = key.split('?')[0].split('#')[0];
 
   // Check R2 bucket if bound
   const bucket = env.STORAGE_BUCKET || env.R2_BUCKET;

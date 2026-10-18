@@ -4,7 +4,7 @@ import test from 'node:test';
 
 import { handleAdminRoyaltyRules, handleAdminWithdrawals, handleCsvImport, handleReleaseReview } from '../dist/handlers/adminHandler.js';
 import { handleRoyalties } from '../dist/index.js';
-import { handleReleaseSubmit, handleStorageGet, handleUpload, getStorageOwnerId } from '../dist/handlers/storageHandler.js';
+import { handleReleaseSubmit, handleStorageGet, handleStorageSign, handleUpload, getStorageOwnerId } from '../dist/handlers/storageHandler.js';
 import { NeonAdapter } from '../dist/adapters/neonAdapter.js';
 import { readFile } from 'node:fs/promises';
 
@@ -155,6 +155,40 @@ test('private report file requires ownership or admin authorization and denies u
   // Admin allowed
   const admin = await handleStorageGet(request('/api/storage/report', 'GET', jwt(adminId, 'admin')), env, sessionAdapter(adminId, 'admin'), {}, fileKey);
   assert.equal(admin.status, 200);
+});
+
+test('admin can request signed download URL for audio master and artwork, and browser receives attachment', async () => {
+  const fileKey = `audio/${artistId}/${randomUUID()}-song.wav`;
+  const env = {
+    JWT_SECRET: secret,
+    STORAGE_BUCKET: {
+      async head(key) { return key === fileKey ? { size: 100 } : null; },
+      async get(key) {
+        return key === fileKey ? {
+          body: new Uint8Array([0x52, 0x49, 0x46, 0x46]),
+          size: 4,
+          httpMetadata: { contentType: 'audio/wav' },
+        } : null;
+      },
+    },
+  };
+  const adminAdapter = sessionAdapter(adminId, 'admin');
+
+  // Request signed download URL
+  const signReq = request('/api/storage/sign', 'POST', jwt(adminId, 'admin'), { fileKey, download: true });
+  const signRes = await handleStorageSign(signReq, env, adminAdapter, {});
+  assert.equal(signRes.status, 200);
+  const signData = await signRes.json();
+  assert.equal(signData.success, true);
+  assert.match(signData.data.url, /download=true/);
+  assert.match(signData.data.url, /signature=/);
+
+  // Fetch using the signed download URL
+  const downloadReq = new Request(signData.data.url, { method: 'GET' });
+  const downloadRes = await handleStorageGet(downloadReq, env, adminAdapter, {}, fileKey);
+  assert.equal(downloadRes.status, 200);
+  assert.equal(downloadRes.headers.get('content-disposition'), 'attachment; filename="song.wav"');
+  assert.equal(downloadRes.headers.get('content-type'), 'audio/wav');
 });
 
 test('release submission verifies ownership, rights acknowledgement, and persistent file presence', async () => {

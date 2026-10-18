@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Check, X, Calendar, Share2, FileAudio, Search, ShieldCheck, CheckCircle2, XCircle, Play, Loader2 } from 'lucide-react';
+import { Check, X, Calendar, Share2, FileAudio, Search, ShieldCheck, CheckCircle2, XCircle, Play, Loader2, Download } from 'lucide-react';
 import type { ReleaseSubmission } from '@services/distributionSyncService';
 import { apiGet, apiPut } from '@lib/api/client';
 import { resolveMediaUrl } from '@/utils/mediaUrl';
-import { getSignedPrivateMediaUrl } from '@services/releaseService';
+import { getSignedPrivateMediaUrl, downloadReleaseFile } from '@services/releaseService';
 
 export default function ReleasesReview() {
   const [submissions, setSubmissions] = useState<ReleaseSubmission[]>([]);
@@ -14,6 +14,8 @@ export default function ReleasesReview() {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [actionMsg, setActionMsg] = useState('');
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [downloadingAudioId, setDownloadingAudioId] = useState<string | null>(null);
+  const [downloadingArtworkId, setDownloadingArtworkId] = useState<string | null>(null);
 
   const loadData = async () => {
     try {
@@ -102,6 +104,52 @@ export default function ReleasesReview() {
       );
     } catch (error) {
       setActionMsg(error instanceof Error ? error.message : 'Preview audio tidak tersedia.');
+    }
+  };
+
+  const handleDownloadAudio = async (item: ReleaseSubmission) => {
+    if (!item.audio_url) {
+      setActionMsg(`Rilisan "${item.title}" tidak memiliki file audio master.`);
+      setTimeout(() => setActionMsg(''), 4000);
+      return;
+    }
+    setDownloadingAudioId(item.id);
+    setActionMsg(`Mengunduh master audio "${item.title}" dari storage...`);
+    try {
+      const ext = item.audio_url.match(/\.(mp3|wav|m4a|aac|flac|ogg)/i)?.[1] || 'wav';
+      const cleanTitle = (item.title || 'Master').replace(/[^a-zA-Z0-9_\-]/g, '_');
+      const cleanArtist = (item.artist_name || 'Artist').replace(/[^a-zA-Z0-9_\-]/g, '_');
+      const targetFilename = `${cleanArtist} - ${cleanTitle} (Audio Master).${ext}`;
+      await downloadReleaseFile(item.audio_url, targetFilename);
+      setActionMsg(`File audio master "${item.title}" berhasil diunduh.`);
+    } catch (err: any) {
+      setActionMsg(`Gagal mengunduh audio master: ${err.message || 'File tidak ditemukan di storage'}`);
+    } finally {
+      setDownloadingAudioId(null);
+      setTimeout(() => setActionMsg(''), 5000);
+    }
+  };
+
+  const handleDownloadArtwork = async (item: ReleaseSubmission) => {
+    if (!item.cover_url) {
+      setActionMsg(`Rilisan "${item.title}" tidak memiliki cover artwork.`);
+      setTimeout(() => setActionMsg(''), 4000);
+      return;
+    }
+    setDownloadingArtworkId(item.id);
+    setActionMsg(`Mengunduh artwork "${item.title}" dari storage...`);
+    try {
+      const ext = item.cover_url.match(/\.(jpe?g|png|webp)/i)?.[1] || 'jpg';
+      const cleanTitle = (item.title || 'Artwork').replace(/[^a-zA-Z0-9_\-]/g, '_');
+      const cleanArtist = (item.artist_name || 'Artist').replace(/[^a-zA-Z0-9_\-]/g, '_');
+      const targetFilename = `${cleanArtist} - ${cleanTitle} (Cover Artwork).${ext}`;
+      await downloadReleaseFile(item.cover_url, targetFilename);
+      setActionMsg(`Cover artwork "${item.title}" berhasil diunduh.`);
+    } catch (err: any) {
+      setActionMsg(`Gagal mengunduh cover artwork: ${err.message || 'File tidak ditemukan di storage'}`);
+    } finally {
+      setDownloadingArtworkId(null);
+      setTimeout(() => setActionMsg(''), 5000);
     }
   };
 
@@ -239,7 +287,7 @@ export default function ReleasesReview() {
             >
               {/* Left: Metadata */}
               <div className="flex items-start sm:items-center gap-4 min-w-0">
-                <div className="w-16 h-16 rounded-2xl overflow-hidden bg-gray-800 flex-shrink-0 relative border border-white/[0.08]">
+                <div className="w-16 h-16 rounded-2xl overflow-hidden bg-gray-800 flex-shrink-0 relative border border-white/[0.08] group/cover">
                   <img
                     src={item.cover_url || '/images/butterfly-effect.jpg'}
                     alt={item.title}
@@ -248,6 +296,21 @@ export default function ReleasesReview() {
                       (e.currentTarget as HTMLImageElement).src = '/images/butterfly-effect.jpg';
                     }}
                   />
+                  {item.cover_url && (
+                    <button
+                      type="button"
+                      disabled={downloadingArtworkId === item.id}
+                      onClick={() => handleDownloadArtwork(item)}
+                      title="Download Cover Artwork Asli"
+                      className="absolute inset-0 bg-black/60 opacity-0 group-hover/cover:opacity-100 flex items-center justify-center transition-opacity text-white text-[10px] font-bold cursor-pointer"
+                    >
+                      {downloadingArtworkId === item.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-purple-300" />
+                      ) : (
+                        <Download className="w-4 h-4 text-purple-300" />
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 <div className="min-w-0">
@@ -266,7 +329,7 @@ export default function ReleasesReview() {
                     {item.artist_name}
                   </p>
 
-                  <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-gray-400">
+                  <div className="flex flex-wrap items-center gap-2.5 mt-2 text-[11px] text-gray-400">
                     <span className="flex items-center gap-1">
                       <Calendar className="w-3 h-3 text-gray-500" />
                       Rilis: {item.release_date}
@@ -275,6 +338,8 @@ export default function ReleasesReview() {
                       <Share2 className="w-3 h-3 text-pink-400" />
                       Klip TikTok: <strong className="text-white">{item.tiktok_clip_start} ({item.tiktok_clip_duration})</strong>
                     </span>
+
+                    {/* 1. Play Audio Master */}
                     {item.audio_url ? (
                       <button
                         type="button"
@@ -291,6 +356,43 @@ export default function ReleasesReview() {
                         {item.audio_name}
                       </span>
                     ) : null}
+
+                    {/* 2. Download Audio Master (Strict storage retrieval) */}
+                    {item.audio_url && (
+                      <button
+                        type="button"
+                        disabled={downloadingAudioId === item.id}
+                        onClick={() => handleDownloadAudio(item)}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer border border-emerald-500/30 disabled:opacity-50"
+                        title="Unduh file audio master asli dari storage"
+                      >
+                        {downloadingAudioId === item.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-emerald-300" />
+                        ) : (
+                          <Download className="w-3 h-3 text-emerald-300" />
+                        )}
+                        <span>Download Audio Master</span>
+                      </button>
+                    )}
+
+                    {/* 3. Download Cover Artwork (Strict storage retrieval) */}
+                    {item.cover_url && (
+                      <button
+                        type="button"
+                        disabled={downloadingArtworkId === item.id}
+                        onClick={() => handleDownloadArtwork(item)}
+                        className="px-2.5 py-1 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer border border-purple-500/30 disabled:opacity-50"
+                        title="Unduh file cover artwork asli dari storage"
+                      >
+                        {downloadingArtworkId === item.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-purple-300" />
+                        ) : (
+                          <Download className="w-3 h-3 text-purple-300" />
+                        )}
+                        <span>Download Artwork</span>
+                      </button>
+                    )}
+
                     {item.isrc && (
                       <span className="text-gray-500 font-mono text-[10px]">
                         ISRC: {item.isrc}

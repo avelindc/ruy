@@ -80,10 +80,86 @@ export async function getSignedPrivateMediaUrl(fileUrl: string): Promise<string>
   const marker = '/api/storage/';
   const index = parsed.pathname.indexOf(marker);
   if (index < 0) throw new Error('Audio file URL is not managed by the Breakout Music Worker.');
-  const fileKey = decodeURIComponent(parsed.pathname.slice(index + marker.length));
+  const fileKey = decodeURIComponent(parsed.pathname.slice(index + marker.length)).split(/[?#]/)[0];
   const response = await apiPost<{ url: string }>('/api/storage/sign', { fileKey });
   if (!response.success || !response.data?.url) throw new Error(response.error || 'Tidak dapat membuat akses preview audio.');
   return response.data.url;
+}
+
+/**
+ * Request a short-lived download URL for an audio master or artwork file.
+ * Returns signed URL that triggers Content-Disposition: attachment in the browser.
+ */
+export async function getDownloadMediaUrl(fileUrlOrKey: string): Promise<string> {
+  const marker = '/api/storage/';
+  let fileKey = fileUrlOrKey;
+  if (fileUrlOrKey.includes(marker)) {
+    fileKey = decodeURIComponent(fileUrlOrKey.split(marker)[1].split('?')[0].split('#')[0]);
+  } else {
+    fileKey = fileUrlOrKey.replace(/^\/+/, '').split('?')[0].split('#')[0];
+  }
+  const response = await apiPost<{ url: string }>('/api/storage/sign', { fileKey, download: true });
+  if (!response.success || !response.data?.url) {
+    throw new Error(response.error || 'Gagal menyiapkan link download file dari storage.');
+  }
+  return response.data.url;
+}
+
+/**
+ * Trigger browser download of a release file with verification and proper filename
+ */
+export async function downloadReleaseFile(
+  fileUrlOrKey: string,
+  preferredFilename?: string
+): Promise<void> {
+  if (!fileUrlOrKey || !fileUrlOrKey.trim()) {
+    throw new Error('File tidak tersedia untuk diunduh.');
+  }
+
+  // 1. Get signed download URL with Content-Disposition: attachment
+  const downloadUrl = await getDownloadMediaUrl(fileUrlOrKey);
+
+  // 2. Fetch via blob to verify file content arrives with status 200 before completing
+  const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+  const res = await fetch(downloadUrl, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!res.ok) {
+    let errMsg = `Gagal mengunduh file (HTTP ${res.status})`;
+    try {
+      const errJson = await res.json();
+      if (errJson.error) errMsg = errJson.error;
+    } catch {}
+    throw new Error(errMsg);
+  }
+
+  const blob = await res.blob();
+  if (blob.size === 0) {
+    throw new Error('File yang diterima dari storage kosong (0 bytes).');
+  }
+
+  // Determine filename
+  let filename = preferredFilename;
+  if (!filename) {
+    const disposition = res.headers.get('content-disposition');
+    const match = disposition?.match(/filename="?([^"]+)"?/);
+    if (match && match[1]) {
+      filename = match[1];
+    } else {
+      const parts = fileUrlOrKey.split(/[?#]/)[0].split('/');
+      filename = parts.pop() || 'download';
+    }
+  }
+
+  const blobUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = blobUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(() => window.URL.revokeObjectURL(blobUrl), 10000);
 }
 
 /**

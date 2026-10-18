@@ -12,7 +12,9 @@ import {
   Info,
   Calculator,
   Filter,
+  Settings,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut } from '@lib/api/client';
 
 type ArtistOption = {
@@ -606,6 +608,15 @@ export default function StreamingRoyaltyManagement() {
           <History className="h-4 w-4" />
           Riwayat &amp; Filter
         </button>
+
+        <Link
+          to="/admin/royalties"
+          className="sm:ml-auto flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-xs font-semibold text-[#A7AAB5] hover:bg-white/[0.08] hover:text-white transition"
+          title="Atur persentase aturan bagi hasil platform (Rule Setup)"
+        >
+          <Settings className="h-4 w-4 text-purple-400" />
+          <span>Konfigurasi Aturan Royalti &rarr;</span>
+        </Link>
       </nav>
 
       {/* ===================== TAB 1: INPUT STREAMING ===================== */}
