@@ -11,7 +11,10 @@ export function getApiBaseUrl(): string {
   }
 
   if (import.meta.env.DEV) return 'http://localhost:8787';
-  throw new Error('VITE_API_URL must point to the new Breakout Music Worker.');
+  // Keep the public site renderable when Pages has not been connected to the
+  // Worker yet. API callers can report the missing configuration at the point
+  // where an API feature is used instead of crashing the whole React app.
+  return '';
 }
 
 export function getStorageApiUrl(fileKey: string): string {

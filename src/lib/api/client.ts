@@ -48,6 +48,10 @@ export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<ApiResponse<T>> {
+  if (!API_URL) {
+    throw new ApiError('API Worker belum dikonfigurasi. Login dan fitur dashboard belum tersedia.', 503, 'API_NOT_CONFIGURED');
+  }
+
   const url = `${API_URL}${endpoint}`;
   const headers = await getAuthHeaders();
 
@@ -153,6 +157,8 @@ export async function apiDelete<T = any>(
  * Check if API is available (health check)
  */
 export async function checkApiHealth(): Promise<boolean> {
+  if (!API_URL) return false;
+
   try {
     const response = await fetch(`${API_URL}/health`);
     return response.ok;

@@ -83,6 +83,10 @@ export async function register(
   password: string,
   fullName: string
 ): Promise<AuthResponse> {
+  if (!API_BASE_URL) {
+    return { success: false, error: 'API Worker belum dikonfigurasi. Registrasi sementara belum tersedia.' };
+  }
+
   try {
     const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
       method: 'POST',
@@ -120,6 +124,10 @@ export async function register(
  * Login with email and password
  */
 export async function login(email: string, password: string): Promise<AuthResponse> {
+  if (!API_BASE_URL) {
+    return { success: false, error: 'API Worker belum dikonfigurasi. Login sementara belum tersedia.' };
+  }
+
   try {
     const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
       method: 'POST',
@@ -154,6 +162,10 @@ export async function login(email: string, password: string): Promise<AuthRespon
 
 /** Verify a stored custom JWT against the Worker's signed-session endpoint. */
 export async function validateSession(token: string): Promise<VerifiedSessionUser | null> {
+  if (!API_BASE_URL) {
+    throw new Error('API Worker belum dikonfigurasi untuk memeriksa sesi.');
+  }
+
   const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
     method: 'GET',
     headers: {
@@ -190,7 +202,7 @@ export async function validateSession(token: string): Promise<VerifiedSessionUse
 export async function logout(): Promise<void> {
   const token = getAuthToken();
   try {
-    if (token) {
+    if (token && API_BASE_URL) {
       await fetch(`${API_BASE_URL}/api/auth/logout`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -206,6 +218,7 @@ export async function logout(): Promise<void> {
 export async function changePassword(currentPassword: string, newPassword: string): Promise<{ error: Error | null }> {
   const token = getAuthToken();
   if (!token) return { error: new Error('Sesi login tidak ditemukan. Silakan masuk kembali.') };
+  if (!API_BASE_URL) return { error: new Error('API Worker belum dikonfigurasi.') };
 
   try {
     const response = await fetch(`${API_BASE_URL}/api/auth/password`, {
