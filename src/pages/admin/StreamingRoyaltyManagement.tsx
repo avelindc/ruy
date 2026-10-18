@@ -14,7 +14,7 @@ import {
   Filter,
   Settings,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { apiGet, apiPost, apiPut } from '@lib/api/client';
 
 type ArtistOption = {
@@ -224,7 +224,19 @@ function ArtistSearchSelect({
 }
 
 export default function StreamingRoyaltyManagement() {
-  const [tab, setTab] = useState<Tab>('streaming');
+  const [searchParams] = useSearchParams();
+  const queryTab = searchParams.get('tab');
+  const [tab, setTab] = useState<Tab>(
+    queryTab === 'royalty' ? 'royalty' : queryTab === 'history' ? 'history' : 'streaming'
+  );
+
+  useEffect(() => {
+    const qTab = searchParams.get('tab');
+    if (qTab === 'royalty' || qTab === 'history' || qTab === 'streaming') {
+      setTab(qTab);
+    }
+  }, [searchParams]);
+
   const [artists, setArtists] = useState<ArtistOption[]>([]);
   const [streamingRows, setStreamingRows] = useState<StreamingRow[]>([]);
   const [royaltyRows, setRoyaltyRows] = useState<RoyaltyRow[]>([]);
