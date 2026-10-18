@@ -497,3 +497,188 @@ test('12. Royalty corrections supersede prior entries, reverse old ledger credit
   assert.match(executedSql, /'royalty_credit', i\."netRoyalty"/);
   assert.match(executedSql, /'MANUAL_ARTIST_ROYALTY_CORRECTED'/);
 });
+
+// 13. Tes Potongan Otomatis & Format Angka Indonesia
+test('13. Automatic deduction calculation and Indonesian number format parsing', async () => {
+  const req100k = request('/api/admin/artist-finance/royalties', 'POST', jwt(adminId, 'admin'), {
+    artist_id: artistId,
+    period_start: '2026-08-01',
+    period_end: '2026-08-31',
+    gross_revenue: '100.000', // Rp100.000 (Indonesian format with dot)
+    deductions: '30.000',    // 30% -> Rp30.000
+    net_royalty: '70.000',   // Bersih -> Rp70.000
+    currency: 'IDR',
+    status: 'draft',
+  });
+
+  let capturedParams = null;
+  const adapter = {
+    ...baseSessionAdapter(),
+    async createManualArtistRoyalty(data, actorId) {
+      capturedParams = { data, actorId };
+      return {
+        id: 'royalty-idr-1',
+        ...data,
+      };
+    },
+  };
+
+  const res100k = await handleAdminArtistFinance(req100k, { JWT_SECRET: secret }, adapter, {});
+  assert.equal(res100k.status, 201);
+  assert.equal(capturedParams.data.gross_revenue, '100000.00');
+  assert.equal(capturedParams.data.deductions, '30000.00');
+  assert.equal(capturedParams.data.net_royalty, '70000.00');
+
+  // Test Rp1.500.000 with 10% deduction -> Rp1.350.000
+  const req1_5M = request('/api/admin/artist-finance/royalties', 'POST', jwt(adminId, 'admin'), {
+    artist_id: artistId,
+    period_start: '2026-08-01',
+    period_end: '2026-08-31',
+    gross_revenue: '1.500.000',
+    deductions: '150.000',
+    net_royalty: '1.350.000',
+    currency: 'IDR',
+    status: 'draft',
+  });
+  const res1_5M = await handleAdminArtistFinance(req1_5M, { JWT_SECRET: secret }, adapter, {});
+  assert.equal(res1_5M.status, 201);
+  assert.equal(capturedParams.data.gross_revenue, '1500000.00');
+  assert.equal(capturedParams.data.deductions, '150000.00');
+  assert.equal(capturedParams.data.net_royalty, '1350000.00');
+
+  // Test 0% deduction (Gross = Net)
+  const req0Percent = request('/api/admin/artist-finance/royalties', 'POST', jwt(adminId, 'admin'), {
+    artist_id: artistId,
+    period_start: '2026-08-01',
+    period_end: '2026-08-31',
+    gross_revenue: '100000',
+    deductions: '0',
+    net_royalty: '100000',
+    currency: 'IDR',
+    status: 'draft',
+  });
+  const res0Percent = await handleAdminArtistFinance(req0Percent, { JWT_SECRET: secret }, adapter, {});
+  assert.equal(res0Percent.status, 201);
+  assert.equal(capturedParams.data.gross_revenue, '100000.00');
+  assert.equal(capturedParams.data.deductions, '0.00');
+  assert.equal(capturedParams.data.net_royalty, '100000.00');
+
+  // Test 100% deduction (Deductions = Gross, Net = 0)
+  const req100Percent = request('/api/admin/artist-finance/royalties', 'POST', jwt(adminId, 'admin'), {
+    artist_id: artistId,
+    period_start: '2026-08-01',
+    period_end: '2026-08-31',
+    gross_revenue: '100.000',
+    deductions: '100.000',
+    net_royalty: '0',
+    currency: 'IDR',
+    status: 'draft',
+  });
+  const res100Percent = await handleAdminArtistFinance(req100Percent, { JWT_SECRET: secret }, adapter, {});
+  assert.equal(res100Percent.status, 201);
+  assert.equal(capturedParams.data.gross_revenue, '100000.00');
+  assert.equal(capturedParams.data.deductions, '100000.00');
+  assert.equal(capturedParams.data.net_royalty, '0.00');
+
+  // Test decimals in Indonesian format: 100.000,50 -> 100000.50
+  const reqDecimalIndo = request('/api/admin/artist-finance/royalties', 'POST', jwt(adminId, 'admin'), {
+    artist_id: artistId,
+    period_start: '2026-08-01',
+    period_end: '2026-08-31',
+    gross_revenue: '100.000,50',
+    deductions: '30.000,15',
+    net_royalty: '70.000,35',
+    currency: 'IDR',
+    status: 'draft',
+  });
+  const resDecimalIndo = await handleAdminArtistFinance(reqDecimalIndo, { JWT_SECRET: secret }, adapter, {});
+  assert.equal(resDecimalIndo.status, 201);
+  assert.equal(capturedParams.data.gross_revenue, '100000.50');
+  assert.equal(capturedParams.data.deductions, '30000.15');
+  assert.equal(capturedParams.data.net_royalty, '70000.35');
+});
+
+// 14. Draft status tidak mengubah saldo artis, Finalisasi mengkredit saldo dan mencatat audit metadata lengkap
+test('14. Draft status does not alter balance; Finalization records idempotent ledger credit with full metadata', async () => {
+  let executedSql = '';
+  let capturedQueryArgs = null;
+  const neonAdapter = new NeonAdapter({
+    async query(sql, params) {
+      executedSql = sql;
+      capturedQueryArgs = params;
+      return {
+        rows: [
+          {
+            id: 'royalty-final-1',
+            artistId,
+            artistName: 'Luna Eclipse',
+            ownerId: artistOwnerId,
+            ownerEmail: 'luna@example.test',
+            periodStart: '2026-08-01',
+            periodEnd: '2026-08-31',
+            streams: '50000',
+            grossRevenue: '100000.00',
+            deductions: '30000.00',
+            netRoyalty: '70000.00',
+            currency: 'IDR',
+            status: 'finalized',
+            createdBy: adminId,
+            createdAt: '2026-09-01T10:00:00Z',
+          },
+        ],
+      };
+    },
+  });
+
+  const created = await neonAdapter.createManualArtistRoyalty({
+    artist_id: artistId,
+    period_start: '2026-08-01',
+    period_end: '2026-08-31',
+    streams: 50000,
+    gross_revenue: '100000.00',
+    deductions: '30000.00',
+    net_royalty: '70000.00',
+    currency: 'IDR',
+    status: 'finalized',
+  }, adminId);
+
+  assert.equal(created.status, 'finalized');
+  assert.equal(created.net_royalty, '70000.00');
+
+  // Verify FinancialLedgerEntry query conditions
+  assert.match(executedSql, /INSERT INTO public\."FinancialLedgerEntry"/);
+  assert.match(executedSql, /WHERE i\.status = 'finalized' AND i\."netRoyalty" > 0/);
+  assert.match(executedSql, /ON CONFLICT \("idempotencyKey"\) DO NOTHING/);
+  assert.match(executedSql, /'manual-artist-royalty:' \|\| i\.id::text/);
+  assert.match(executedSql, /'deductionPercent'/);
+  assert.match(executedSql, /'grossRevenue'/);
+  assert.match(executedSql, /'deductions'/);
+  assert.match(executedSql, /'netRoyalty'/);
+  assert.match(executedSql, /'artistName'/);
+  assert.match(executedSql, /'currency'/);
+});
+
+// 15. Mode streaming agregat tidak mewajibkan nama platform dan otomatis diset ke Agregat
+test('15. Aggregate streaming mode does not require platform name and defaults to Agregat', async () => {
+  let capturedInput = null;
+  const adapter = {
+    ...baseSessionAdapter(),
+    async createArtistStreamingAggregate(input, actorId) {
+      capturedInput = { input, actorId };
+      return { id: 'stream-agg-1', ...input };
+    },
+  };
+
+  const req = request('/api/admin/artist-finance/streaming', 'POST', jwt(adminId, 'admin'), {
+    artist_id: artistId,
+    is_aggregate: true,
+    period_start: '2026-08-01',
+    period_end: '2026-08-31',
+    streams: 250000,
+  });
+
+  const res = await handleAdminArtistFinance(req, { JWT_SECRET: secret }, adapter, {});
+  assert.equal(res.status, 201);
+  assert.equal(capturedInput.input.platform, 'Agregat');
+  assert.equal(capturedInput.input.streams, 250000);
+});

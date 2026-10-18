@@ -4,6 +4,8 @@ import { Music, TrendingUp, DollarSign, BarChart3, Plus, Loader } from 'lucide-r
 import { getCurrentUser } from '@lib/auth/authService';
 import { getUserArtists } from '@services/artistService';
 import { getUserReleases } from '@services/releaseService';
+import { getWalletTransactions } from '@services/withdrawalService';
+import { apiGet } from '@lib/api/client';
 
 export default function DashboardOverview() {
   const navigate = useNavigate();
@@ -11,6 +13,7 @@ export default function DashboardOverview() {
   const [stats, setStats] = useState({
     totalStreams: null as number | null,
     availableBalance: null as number | null,
+    balanceFormatted: '—',
     totalArtists: 0,
     totalReleases: 0,
   });
@@ -27,19 +30,48 @@ export default function DashboardOverview() {
           return;
         }
 
-        // Fetch artists
-        const { data: artists, error: artistsError } = await getUserArtists(user.id);
-        if (artistsError) throw artistsError;
+        // Fetch artists, releases, wallet transactions, and streaming aggregates
+        const [artistsRes, releasesRes, walletRes, streamsRes] = await Promise.all([
+          getUserArtists(user.id),
+          getUserReleases(user.id),
+          getWalletTransactions(user.id),
+          apiGet<any>('/api/artist-streaming-aggregates').catch(() => ({ success: false, data: { data: [] } })),
+        ]);
 
-        // Fetch releases
-        const { data: releases, error: releasesError } = await getUserReleases(user.id);
-        if (releasesError) throw releasesError;
+        if (artistsRes.error) throw artistsRes.error;
+        if (releasesRes.error) throw releasesRes.error;
+
+        // Process wallet balance from financial ledger
+        const summary = walletRes.summary || [];
+        let primaryBalanceText = '—';
+        let primaryBalanceNum = 0;
+        if (summary.length > 0) {
+          primaryBalanceText = summary
+            .map((s: { currency: string; balance: number }) => {
+              const formatted = new Intl.NumberFormat('id-ID', {
+                minimumFractionDigits: Math.floor(s.balance) === s.balance ? 0 : 2,
+                maximumFractionDigits: 2,
+              }).format(s.balance);
+              return s.currency === 'IDR' ? `Rp ${formatted}` : `${s.currency} ${formatted}`;
+            })
+            .join(' · ');
+          primaryBalanceNum = summary.reduce((sum: number, s: { balance: number }) => sum + Number(s.balance || 0), 0);
+        }
+
+        // Process streams
+        const streamRows: any[] = streamsRes.data?.data || [];
+        const aggregateRows = streamRows.filter((r) => r.platform?.toLowerCase() === 'agregat' || r.platform?.toLowerCase() === 'all');
+        const platformRows = streamRows.filter((r) => r.platform?.toLowerCase() !== 'agregat' && r.platform?.toLowerCase() !== 'all');
+        const totalStreams = aggregateRows.length > 0
+          ? aggregateRows.reduce((sum, r) => sum + Number(r.streams || 0), 0)
+          : platformRows.reduce((sum, r) => sum + Number(r.streams || 0), 0);
 
         setStats({
-          totalStreams: null,
-          availableBalance: null,
-          totalArtists: artists?.length || 0,
-          totalReleases: releases?.length || 0,
+          totalStreams: totalStreams > 0 ? totalStreams : null,
+          availableBalance: summary.length > 0 ? primaryBalanceNum : null,
+          balanceFormatted: primaryBalanceText,
+          totalArtists: artistsRes.data?.length || 0,
+          totalReleases: releasesRes.data?.length || 0,
         });
       } catch (err) {
         setError('Failed to load dashboard data');
@@ -64,9 +96,21 @@ export default function DashboardOverview() {
   }
 
   const statCards = [
-    { label: 'Total Streams', value: stats.totalStreams?.toLocaleString() ?? '—', icon: Music, color: 'purple' },
+    {
+      label: 'Total Streams',
+      value: stats.totalStreams != null
+        ? new Intl.NumberFormat('id-ID').format(stats.totalStreams)
+        : '—',
+      icon: Music,
+      color: 'purple',
+    },
     { label: 'Monthly Performance', value: '—', icon: TrendingUp, color: 'blue' },
-    { label: 'Available Balance', value: stats.availableBalance === null ? '—' : `$${stats.availableBalance.toFixed(2)}`, icon: DollarSign, color: 'green' },
+    {
+      label: 'Available Balance',
+      value: stats.balanceFormatted,
+      icon: DollarSign,
+      color: 'green',
+    },
     { label: 'Total Releases', value: stats.totalReleases.toString(), icon: BarChart3, color: 'orange' },
   ];
 

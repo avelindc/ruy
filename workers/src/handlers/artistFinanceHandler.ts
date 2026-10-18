@@ -32,18 +32,100 @@ function isIsoDate(value: unknown): value is string {
 
 function parseMoney(value: unknown, field: string, optional = false): string | null {
   if ((value === undefined || value === null || value === '') && optional) return null;
-  const normalized = typeof value === 'number' && Number.isFinite(value) ? String(value) : value;
-  if (typeof normalized !== 'string' || !/^\d{1,14}(\.\d{1,2})?$/.test(normalized)) {
+  if (value === undefined || value === null || value === '') {
+    throw new ValidationError(`${field} is required.`);
+  }
+
+  let str: string;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Number.isNaN(value) || value < 0) {
+      throw new ValidationError(`${field} must be a non-negative amount with at most two decimal places.`);
+    }
+    str = value.toFixed(2);
+  } else if (typeof value === 'string') {
+    str = value.trim();
+    if (!str && optional) return null;
+    if (!str) throw new ValidationError(`${field} is required.`);
+  } else {
+    throw new ValidationError(`${field} must be a valid amount.`);
+  }
+
+  // Strip currency prefixes e.g. "Rp", "Rp.", "IDR", "$"
+  str = str.replace(/^(Rp\.?|IDR|\$|\€|\£)\s*/i, '').trim();
+
+  if (str.startsWith('-')) {
+    throw new ValidationError(`${field} must be a non-negative amount.`);
+  }
+
+  // Handle Indonesian thousand separator dots vs commas
+  // e.g. "1.500.000,50" -> dots are thousands, comma is decimal
+  // e.g. "1,500,000.50" -> commas are thousands, dot is decimal
+  // e.g. "100.000" or "1.500.000" -> thousand separator dot
+  // e.g. "100.50" -> decimal dot
+  if (str.includes('.') && str.includes(',')) {
+    const lastDot = str.lastIndexOf('.');
+    const lastComma = str.lastIndexOf(',');
+    if (lastComma > lastDot) {
+      str = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      str = str.replace(/,/g, '');
+    }
+  } else if (str.includes('.')) {
+    const parts = str.split('.');
+    if (parts.length > 2) {
+      // Multiple dots: 1.500.000
+      str = parts.join('');
+    } else {
+      // Exactly one dot: e.g. "100.000" (seratus ribu) vs "100.50" (seratus koma lima puluh)
+      const decimalPart = parts[1];
+      if (decimalPart.length === 3) {
+        // In Indonesian currency context, a 3-digit dot suffix is thousand separator
+        str = parts.join('');
+      } else if (decimalPart.length <= 2) {
+        str = parts.join('.');
+      } else {
+        throw new ValidationError(`${field} must be a non-negative amount with at most two decimal places.`);
+      }
+    }
+  } else if (str.includes(',')) {
+    const parts = str.split(',');
+    if (parts.length > 2) {
+      str = parts.join('');
+    } else {
+      const decimalPart = parts[1];
+      if (decimalPart.length === 3) {
+        str = parts.join('');
+      } else if (decimalPart.length <= 2) {
+        str = parts.join('.');
+      } else {
+        throw new ValidationError(`${field} must be a non-negative amount with at most two decimal places.`);
+      }
+    }
+  }
+
+  if (!/^\d{1,14}(\.\d{1,2})?$/.test(str)) {
     throw new ValidationError(`${field} must be a non-negative amount with at most two decimal places.`);
   }
-  return normalized;
+
+  const num = Number(str);
+  if (!Number.isFinite(num) || num < 0) {
+    throw new ValidationError(`${field} must be a non-negative amount.`);
+  }
+  return num.toFixed(2);
 }
 
 function parseStreamingInput(value: unknown): ArtistStreamingAggregateInput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ValidationError('A streaming report object is required.');
   const body = value as Record<string, unknown>;
   if (typeof body.artist_id !== 'string' || !uuidPattern.test(body.artist_id)) throw new ValidationError('Select a valid catalog artist.');
-  if (typeof body.platform !== 'string' || !body.platform.trim() || body.platform.trim().length > 80) throw new ValidationError('Platform is required and must be at most 80 characters.');
+
+  const isAggregate = body.is_aggregate === true || body.platform_mode === 'aggregate';
+  let platform = typeof body.platform === 'string' ? body.platform.trim() : '';
+  if (isAggregate && (!platform || platform === 'ALL' || platform === 'Semua Platform')) {
+    platform = 'Agregat';
+  }
+  if (!platform || platform.length > 80) throw new ValidationError('Platform is required and must be at most 80 characters.');
+
   if (!isIsoDate(body.period_start) || !isIsoDate(body.period_end) || body.period_end < body.period_start) throw new ValidationError('A valid report period is required.');
   if (typeof body.streams !== 'number' || !Number.isSafeInteger(body.streams) || body.streams < 0) throw new ValidationError('Stream count must be a non-negative whole number.');
   const gross = parseMoney(body.gross_revenue, 'Reported revenue', true);
@@ -55,7 +137,7 @@ function parseStreamingInput(value: unknown): ArtistStreamingAggregateInput {
   if (body.notes != null && (typeof body.notes !== 'string' || body.notes.length > 2000)) throw new ValidationError('Admin notes must be at most 2,000 characters.');
   return {
     artist_id: body.artist_id,
-    platform: body.platform.trim(),
+    platform,
     period_start: body.period_start,
     period_end: body.period_end,
     streams: body.streams,
@@ -74,7 +156,7 @@ function parseRoyaltyInput(value: unknown, artistIdRequired: boolean): ManualArt
   if (!isIsoDate(body.period_start) || !isIsoDate(body.period_end) || body.period_end < body.period_start) throw new ValidationError('A valid royalty period is required.');
   if (body.streams != null && (typeof body.streams !== 'number' || !Number.isSafeInteger(body.streams) || body.streams < 0)) throw new ValidationError('Related streams must be a non-negative whole number.');
   const gross = parseMoney(body.gross_revenue, 'Gross revenue', true);
-  const deductions = parseMoney(body.deductions, 'Deductions');
+  const deductions = parseMoney(body.deductions ?? '0.00', 'Deductions');
   const net = parseMoney(body.net_royalty, 'Net royalty');
   if (!body.currency || typeof body.currency !== 'string' || !supportedCurrencies.has(body.currency.toUpperCase())) throw new ValidationError('Choose a supported ISO 4217 currency.');
   if (gross !== null && Number(deductions) > Number(gross)) throw new ValidationError('Deductions cannot exceed gross revenue.');

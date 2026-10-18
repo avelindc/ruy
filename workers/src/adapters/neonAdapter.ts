@@ -1192,7 +1192,16 @@ export class NeonAdapter implements DatabaseAdapter {
         )
         SELECT a."userId", i."artistId", 'royalty_credit', i."netRoyalty", i.currency,
           'manual_artist_royalty', i.id, 'manual-artist-royalty:' || i.id::text,
-          'Finalized manual artist royalty', jsonb_build_object('periodStart', i."periodStart", 'periodEnd', i."periodEnd"), $12::uuid
+          'Finalized manual artist royalty', jsonb_build_object(
+            'periodStart', i."periodStart",
+            'periodEnd', i."periodEnd",
+            'grossRevenue', i."grossRevenue",
+            'deductions', i.deductions,
+            'deductionPercent', CASE WHEN i."grossRevenue" > 0 THEN round((i.deductions / i."grossRevenue") * 100, 2) ELSE 0 END,
+            'netRoyalty', i."netRoyalty",
+            'currency', i.currency,
+            'artistName', a."stageName"
+          ), $12::uuid
         FROM inserted i JOIN public."Artist" a ON a.id = i."artistId"
         WHERE i.status = 'finalized' AND i."netRoyalty" > 0
         ON CONFLICT ("idempotencyKey") DO NOTHING
@@ -1237,7 +1246,14 @@ export class NeonAdapter implements DatabaseAdapter {
         )
         SELECT a."userId", p."artistId", 'adjustment_credit', -p."netRoyalty", p.currency,
           'manual_artist_royalty_reversal', p.id, 'manual-artist-royalty-reversal:' || p.id::text,
-          'Reversal for corrected manual artist royalty', jsonb_build_object('correctionReason', $12), $13::uuid
+          'Reversal for corrected manual artist royalty', jsonb_build_object(
+            'correctionReason', $12,
+            'previousNetRoyalty', p."netRoyalty",
+            'currency', p.currency,
+            'periodStart', p."periodStart",
+            'periodEnd', p."periodEnd",
+            'artistName', a."stageName"
+          ), $13::uuid
         FROM previous p JOIN public."Artist" a ON a.id = p."artistId"
         WHERE p.status = 'finalized' AND p."netRoyalty" > 0
         ON CONFLICT ("idempotencyKey") DO NOTHING
@@ -1249,7 +1265,17 @@ export class NeonAdapter implements DatabaseAdapter {
         )
         SELECT a."userId", i."artistId", 'royalty_credit', i."netRoyalty", i.currency,
           'manual_artist_royalty', i.id, 'manual-artist-royalty:' || i.id::text,
-          'Corrected finalized manual artist royalty', jsonb_build_object('supersedesId', i."supersedesId"), $13::uuid
+          'Corrected finalized manual artist royalty', jsonb_build_object(
+            'supersedesId', i."supersedesId",
+            'periodStart', i."periodStart",
+            'periodEnd', i."periodEnd",
+            'grossRevenue', i."grossRevenue",
+            'deductions', i.deductions,
+            'deductionPercent', CASE WHEN i."grossRevenue" > 0 THEN round((i.deductions / i."grossRevenue") * 100, 2) ELSE 0 END,
+            'netRoyalty', i."netRoyalty",
+            'currency', i.currency,
+            'artistName', a."stageName"
+          ), $13::uuid
         FROM inserted i JOIN public."Artist" a ON a.id = i."artistId"
         WHERE i.status = 'finalized' AND i."netRoyalty" > 0
         ON CONFLICT ("idempotencyKey") DO NOTHING
