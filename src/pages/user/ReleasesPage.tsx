@@ -29,7 +29,9 @@ import {
   createRelease,
   updateRelease,
   submitReleaseForReview,
-  uploadReleaseFile
+  uploadReleaseFile,
+  getSignedPrivateMediaUrl,
+  getReleaseHistory,
 } from '@services/releaseService';
 
 interface UserArtist {
@@ -49,6 +51,9 @@ export default function ReleasesPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [userArtists, setUserArtists] = useState<UserArtist[]>([]);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [statusHistory, setStatusHistory] = useState<Record<string, any[]>>({});
+  const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
 
   // Form State
   const [title, setTitle] = useState('');
@@ -57,6 +62,28 @@ export default function ReleasesPage() {
   const [selectedArtistId, setSelectedArtistId] = useState('');
   const [artistName, setArtistName] = useState('');
   const [genre, setGenre] = useState('Pop');
+  const [subgenre, setSubgenre] = useState('');
+  const [releaseVersion, setReleaseVersion] = useState('');
+  const [language, setLanguage] = useState('');
+  const [originalReleaseDate, setOriginalReleaseDate] = useState('');
+  const [featuredArtists, setFeaturedArtists] = useState('');
+  const [labelName, setLabelName] = useState('');
+  const [selfReleased, setSelfReleased] = useState(true);
+  const [copyrightC, setCopyrightC] = useState('');
+  const [copyrightP, setCopyrightP] = useState('');
+  const [releaseNotes, setReleaseNotes] = useState('');
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [trackVersion, setTrackVersion] = useState('');
+  const [trackTitle, setTrackTitle] = useState('');
+  const [trackNumber, setTrackNumber] = useState(1);
+  const [discNumber, setDiscNumber] = useState(1);
+  const [composers, setComposers] = useState('');
+  const [songwriters, setSongwriters] = useState('');
+  const [producers, setProducers] = useState('');
+  const [arrangers, setArrangers] = useState('');
+  const [trackFeaturedArtists, setTrackFeaturedArtists] = useState('');
+  const [explicitContent, setExplicitContent] = useState(false);
+  const [rightsOwnership, setRightsOwnership] = useState('');
   const [releaseDate, setReleaseDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 14);
@@ -104,6 +131,28 @@ export default function ReleasesPage() {
     setTitle('');
     setReleaseType('single');
     setGenre('Pop');
+    setSubgenre('');
+    setReleaseVersion('');
+    setLanguage('');
+    setOriginalReleaseDate('');
+    setFeaturedArtists('');
+    setLabelName('');
+    setSelfReleased(true);
+    setCopyrightC('');
+    setCopyrightP('');
+    setReleaseNotes('');
+    setRightsConfirmed(false);
+    setTrackVersion('');
+    setTrackTitle('');
+    setTrackNumber(1);
+    setDiscNumber(1);
+    setComposers('');
+    setSongwriters('');
+    setProducers('');
+    setArrangers('');
+    setTrackFeaturedArtists('');
+    setExplicitContent(false);
+    setRightsOwnership('');
     setCoverUrl('');
     setCoverUploading(false);
     setCoverProgress(0);
@@ -176,6 +225,17 @@ export default function ReleasesPage() {
               release_type: (ar.release_type?.toLowerCase() || 'single') as any,
               artist_name: ar.artist?.artist_name || ar.artist?.name || ar.primaryArtist || '',
               genre: ar.genre || '',
+              subgenre: ar.subgenre || '',
+              release_version: ar.release_version || '',
+              original_release_date: ar.original_release_date || '',
+              featured_artists: ar.featured_artists || [],
+              language: ar.language || '',
+              label_name: ar.label_name || '',
+              self_released: ar.self_released === true,
+              copyright_c: ar.copyright_c || '',
+              copyright_p: ar.copyright_p || '',
+              notes: ar.notes || '',
+              distribution_rights_confirmed: ar.distribution_rights_confirmed === true,
               release_date: ar.release_date?.split('T')[0] || '',
               cover_url: resolveMediaUrl(ar.cover_artwork_url || ar.artwork_url || ar.cover_url || ''),
               audio_name: '',
@@ -183,6 +243,8 @@ export default function ReleasesPage() {
               tiktok_clip_start: trackObj.tiktok_clip_start || '',
               tiktok_clip_duration: '',
               isrc: trackObj.isrc || '',
+              tracks: ar.tracks || [],
+              rejection_reason: ar.rejection_reason || '',
               upc: ar.upc || '',
               status,
               user_id: user.id,
@@ -204,11 +266,18 @@ export default function ReleasesPage() {
     }
   };
 
-  const handlePlayAudio = (track: { title: string; artist_name?: string; cover_url?: string; audio_url?: string }) => {
+  const handlePlayAudio = async (track: { title: string; artist_name?: string; cover_url?: string; audio_url?: string }) => {
     const resolvedAudio = resolveMediaUrl(track.audio_url);
     const resolvedCover = resolveMediaUrl(track.cover_url);
     if (!resolvedAudio) {
       alert('File audio master belum tersedia untuk rilis ini.');
+      return;
+    }
+    let privateAudioUrl: string;
+    try {
+      privateAudioUrl = await getSignedPrivateMediaUrl(resolvedAudio);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : 'Preview audio tidak tersedia.');
       return;
     }
     window.dispatchEvent(
@@ -218,10 +287,24 @@ export default function ReleasesPage() {
           artist: track.artist_name || '',
           album: track.title,
           cover_url: resolvedCover || '/images/butterfly-effect.jpg',
-          audio_url: resolvedAudio,
+          audio_url: privateAudioUrl,
         },
       })
     );
+  };
+
+  const toggleReleaseHistory = async (releaseId: string) => {
+    if (expandedHistoryId === releaseId) {
+      setExpandedHistoryId(null);
+      return;
+    }
+    setExpandedHistoryId(releaseId);
+    if (statusHistory[releaseId]) return;
+    setHistoryLoadingId(releaseId);
+    const result = await getReleaseHistory(releaseId);
+    if (result.error) setErrorMsg(result.error.message);
+    else setStatusHistory((current) => ({ ...current, [releaseId]: result.data }));
+    setHistoryLoadingId(null);
   };
 
   useEffect(() => {
@@ -342,14 +425,36 @@ export default function ReleasesPage() {
         release_type: releaseType,
         primary_artist_id: finalArtistId || undefined,
         genre: genre,
+        subgenre: subgenre.trim() || undefined,
+        release_version: releaseVersion.trim() || undefined,
+        language: language.trim() || undefined,
+        original_release_date: originalReleaseDate || undefined,
+        featured_artists: featuredArtists.split(',').map((name) => name.trim()).filter(Boolean),
+        label_name: selfReleased ? undefined : labelName.trim() || undefined,
+        self_released: selfReleased,
+        copyright_c: copyrightC.trim() || undefined,
+        copyright_p: copyrightP.trim() || undefined,
+        notes: releaseNotes.trim() || undefined,
+        distribution_rights_confirmed: rightsConfirmed,
         release_date: releaseDate,
         artwork_url: coverUrl || '',
         cover_artwork_url: coverUrl || '',
-        status: 'draft',
         tracks: audioName ? [{
-          title: title.trim(),
+          title: trackTitle.trim() || title.trim(),
           audio_url: audioUrl || '',
           isrc: isrc.trim() || undefined,
+          track_version: trackVersion.trim() || undefined,
+          primary_artist: artistName.trim() || undefined,
+          featured_artists: trackFeaturedArtists.split(',').map((name) => name.trim()).filter(Boolean),
+          composers: composers.split(',').map((name) => name.trim()).filter(Boolean),
+          songwriters: songwriters.split(',').map((name) => name.trim()).filter(Boolean),
+          producers: producers.split(',').map((name) => name.trim()).filter(Boolean),
+          arrangers: arrangers.split(',').map((name) => name.trim()).filter(Boolean),
+          explicit_content: explicitContent,
+          rights_ownership: rightsOwnership.trim() || undefined,
+          distribution_rights_confirmed: rightsConfirmed,
+          track_number: trackNumber,
+          disc_number: discNumber,
         }] : [],
       };
 
@@ -391,6 +496,10 @@ export default function ReleasesPage() {
       setErrorMsg('File Master Audio wajib diunggah dan terverifikasi di storage sebelum mengajukan rilis.');
       return;
     }
+    if (!rightsConfirmed) {
+      setErrorMsg('Konfirmasi hak distribusi dan kepemilikan wajib dilakukan sebelum mengajukan rilis.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -422,13 +531,36 @@ export default function ReleasesPage() {
           release_type: releaseType,
           primary_artist_id: finalArtistId || undefined,
           genre: genre,
+          subgenre: subgenre.trim() || undefined,
+          release_version: releaseVersion.trim() || undefined,
+          language: language.trim() || undefined,
+          original_release_date: originalReleaseDate || undefined,
+          featured_artists: featuredArtists.split(',').map((name) => name.trim()).filter(Boolean),
+          label_name: selfReleased ? undefined : labelName.trim() || undefined,
+          self_released: selfReleased,
+          copyright_c: copyrightC.trim() || undefined,
+          copyright_p: copyrightP.trim() || undefined,
+          notes: releaseNotes.trim() || undefined,
+          distribution_rights_confirmed: rightsConfirmed,
           release_date: releaseDate,
           artwork_url: coverUrl,
           cover_artwork_url: coverUrl,
           tracks: [{
-            title: title.trim(),
+            title: trackTitle.trim() || title.trim(),
             audio_url: audioUrl,
             isrc: suppliedIsrc,
+            track_version: trackVersion.trim() || undefined,
+            primary_artist: artistName.trim() || undefined,
+            featured_artists: trackFeaturedArtists.split(',').map((name) => name.trim()).filter(Boolean),
+            composers: composers.split(',').map((name) => name.trim()).filter(Boolean),
+            songwriters: songwriters.split(',').map((name) => name.trim()).filter(Boolean),
+            producers: producers.split(',').map((name) => name.trim()).filter(Boolean),
+            arrangers: arrangers.split(',').map((name) => name.trim()).filter(Boolean),
+            explicit_content: explicitContent,
+            rights_ownership: rightsOwnership.trim() || undefined,
+            distribution_rights_confirmed: rightsConfirmed,
+            track_number: trackNumber,
+            disc_number: discNumber,
           }],
         });
 
@@ -440,11 +572,34 @@ export default function ReleasesPage() {
         await updateRelease(targetReleaseId, {
           title: title.trim(),
           genre: genre,
+          subgenre: subgenre.trim() || undefined,
+          release_version: releaseVersion.trim() || undefined,
+          language: language.trim() || undefined,
+          original_release_date: originalReleaseDate || undefined,
+          featured_artists: featuredArtists.split(',').map((name) => name.trim()).filter(Boolean),
+          label_name: selfReleased ? undefined : labelName.trim() || undefined,
+          self_released: selfReleased,
+          copyright_c: copyrightC.trim() || undefined,
+          copyright_p: copyrightP.trim() || undefined,
+          notes: releaseNotes.trim() || undefined,
+          distribution_rights_confirmed: rightsConfirmed,
           artwork_url: coverUrl,
           tracks: [{
-            title: title.trim(),
+            title: trackTitle.trim() || title.trim(),
             audio_url: audioUrl,
             isrc: suppliedIsrc,
+            track_version: trackVersion.trim() || undefined,
+            primary_artist: artistName.trim() || undefined,
+            featured_artists: trackFeaturedArtists.split(',').map((name) => name.trim()).filter(Boolean),
+            composers: composers.split(',').map((name) => name.trim()).filter(Boolean),
+            songwriters: songwriters.split(',').map((name) => name.trim()).filter(Boolean),
+            producers: producers.split(',').map((name) => name.trim()).filter(Boolean),
+            arrangers: arrangers.split(',').map((name) => name.trim()).filter(Boolean),
+            explicit_content: explicitContent,
+            rights_ownership: rightsOwnership.trim() || undefined,
+            distribution_rights_confirmed: rightsConfirmed,
+            track_number: trackNumber,
+            disc_number: discNumber,
           }],
         });
       }
@@ -475,6 +630,29 @@ export default function ReleasesPage() {
     setTitle(rel.title);
     setReleaseType((rel.release_type as any) || 'single');
     setGenre(rel.genre || 'Pop');
+    setSubgenre(rel.subgenre || '');
+    setReleaseVersion(rel.release_version || '');
+    setLanguage(rel.language || '');
+    setOriginalReleaseDate(rel.original_release_date || '');
+    setFeaturedArtists((rel.featured_artists || []).join(', '));
+    setLabelName(rel.label_name || '');
+    setSelfReleased(rel.self_released ?? !rel.label_name);
+    setCopyrightC(rel.copyright_c || '');
+    setCopyrightP(rel.copyright_p || '');
+    setReleaseNotes(rel.notes || '');
+    setRightsConfirmed(rel.distribution_rights_confirmed === true);
+    const track = rel.tracks?.[0];
+    setTrackTitle(track?.title || '');
+    setTrackVersion(track?.track_version || '');
+    setTrackNumber(track?.track_number || 1);
+    setDiscNumber(track?.disc_number || 1);
+    setComposers((track?.composers || []).join(', '));
+    setSongwriters((track?.songwriters || []).join(', '));
+    setProducers((track?.producers || []).join(', '));
+    setArrangers((track?.arrangers || []).join(', '));
+    setTrackFeaturedArtists((track?.featured_artists || []).join(', '));
+    setExplicitContent(track?.explicit_content === true);
+    setRightsOwnership(track?.rights_ownership || '');
     setReleaseDate(rel.release_date || new Date().toISOString().split('T')[0]);
     if (rel.cover_url) {
       setCoverUrl(rel.cover_url);
@@ -504,10 +682,10 @@ export default function ReleasesPage() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Disc3 className="w-5 h-5 text-indigo-400" />
-            <h1 className="text-2xl font-black text-white tracking-tight">Rilis Lagu (Music Distribution)</h1>
+            <h1 className="text-2xl font-black text-white tracking-tight">Rilis Lagu (Review &amp; Catalog)</h1>
           </div>
           <p className="text-xs text-gray-400">
-            Submit rilis lagu baru ke 150+ platform streaming global (Spotify, Apple Music, TikTok, YouTube).
+            Ajukan metadata dan master rilis untuk review internal. Persetujuan belum berarti rilis dikirim ke distributor eksternal.
           </p>
         </div>
 
@@ -579,7 +757,7 @@ export default function ReleasesPage() {
       <div className="space-y-3">
         {filteredReleases.length > 0 ? (
           filteredReleases.map((release) => {
-            const isDraft = (release.status as string) === 'draft' || (release.status as string) === 'pending';
+            const isDraft = (release.status as string) === 'draft' || (release.status as string) === 'pending' || release.status === 'rejected';
 
             const statusConfig = {
               draft: { label: 'Draft (Belum Diajukan)', bg: 'bg-zinc-500/10 text-zinc-300 border-zinc-500/20', icon: Clock },
@@ -683,6 +861,22 @@ export default function ReleasesPage() {
                       <strong>Catatan Admin:</strong> {release.rejection_reason}
                     </div>
                   )}
+                  <button type="button" onClick={() => void toggleReleaseHistory(release.id)} className="self-start text-xs text-indigo-300 hover:text-indigo-200 underline underline-offset-2">
+                    {expandedHistoryId === release.id ? 'Tutup riwayat status' : 'Lihat riwayat status'}
+                  </button>
+                  {expandedHistoryId === release.id && (
+                    <div className="w-full max-w-sm rounded-xl border border-white/[0.08] bg-black/20 p-3 text-xs text-gray-300">
+                      {historyLoadingId === release.id ? 'Memuat riwayat…' : (statusHistory[release.id] || []).length === 0
+                        ? 'Belum ada perubahan status tercatat.'
+                        : (statusHistory[release.id] || []).map((item, index) => (
+                          <div key={`${release.id}-${item.created_at}-${index}`} className="border-b border-white/[0.06] py-2 last:border-0">
+                            <div className="flex justify-between gap-2"><strong>{String(item.new_status).replace(/_/g, ' ')}</strong><time>{new Date(item.created_at).toLocaleString('id-ID')}</time></div>
+                            {item.actor_name && <div className="text-gray-500">Oleh {item.actor_name}</div>}
+                            {item.reason && <div className="mt-1 text-gray-400">{item.reason}</div>}
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -692,7 +886,7 @@ export default function ReleasesPage() {
             <Disc3 className="w-12 h-12 text-gray-600 mx-auto mb-3" />
             <h3 className="text-sm font-bold text-white">Belum Ada Rilis Lagu</h3>
             <p className="text-xs text-gray-400 mt-1 max-w-sm mx-auto">
-              Mulai distribusikan karya musik Anda ke Spotify, TikTok, dan platform global dengan menekan tombol Buat Rilis Baru.
+              Mulai dengan mengirim metadata karya untuk ditinjau oleh admin.
             </p>
             <button
               type="button"
@@ -857,6 +1051,40 @@ export default function ReleasesPage() {
                     className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
+              </div>
+
+              <div className="space-y-4 bg-[#121218] border border-white/[0.06] p-4 rounded-2xl">
+                <h3 className="font-bold text-gray-200">Metadata Rilis &amp; Hak</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input aria-label="Subgenre" placeholder="Subgenre (opsional)" value={subgenre} onChange={(e) => setSubgenre(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Versi rilis" placeholder="Versi rilis (opsional)" value={releaseVersion} onChange={(e) => setReleaseVersion(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Bahasa" placeholder="Bahasa utama (opsional)" value={language} onChange={(e) => setLanguage(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Tanggal rilis original" type="date" value={originalReleaseDate} onChange={(e) => setOriginalReleaseDate(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Featured artist rilis" placeholder="Featured artist (pisahkan koma)" value={featuredArtists} onChange={(e) => setFeaturedArtists(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Label" placeholder="Nama label (jika bukan self-released)" value={labelName} onChange={(e) => setLabelName(e.target.value)} disabled={selfReleased} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white disabled:opacity-50" />
+                  <input aria-label="Copyright C" placeholder="Copyright C (opsional)" value={copyrightC} onChange={(e) => setCopyrightC(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Copyright P" placeholder="Copyright P (opsional)" value={copyrightP} onChange={(e) => setCopyrightP(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                </div>
+                <label className="flex items-center gap-2 text-gray-300"><input type="checkbox" checked={selfReleased} onChange={(e) => setSelfReleased(e.target.checked)} /> Self-released</label>
+                <textarea aria-label="Catatan rilis" rows={2} placeholder="Catatan tambahan (opsional)" value={releaseNotes} onChange={(e) => setReleaseNotes(e.target.value)} className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+              </div>
+
+              <div className="space-y-4 bg-[#121218] border border-white/[0.06] p-4 rounded-2xl">
+                <h3 className="font-bold text-gray-200">Metadata Track</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input aria-label="Judul track" placeholder="Judul track" value={trackTitle} onChange={(e) => setTrackTitle(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Versi track" placeholder="Versi track (opsional)" value={trackVersion} onChange={(e) => setTrackVersion(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Composer" placeholder="Composer(s), pisahkan koma" value={composers} onChange={(e) => setComposers(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Songwriter" placeholder="Songwriter / lyricist(s)" value={songwriters} onChange={(e) => setSongwriters(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Producer" placeholder="Producer(s), pisahkan koma" value={producers} onChange={(e) => setProducers(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Arranger" placeholder="Arranger(s), pisahkan koma" value={arrangers} onChange={(e) => setArrangers(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Featured artists track" placeholder="Featured artist(s) track" value={trackFeaturedArtists} onChange={(e) => setTrackFeaturedArtists(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <input aria-label="Hak track" placeholder="Pemilik hak track (opsional)" value={rightsOwnership} onChange={(e) => setRightsOwnership(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+                  <label className="flex items-center gap-2 text-gray-300">Track no. <input type="number" min={1} value={trackNumber} onChange={(e) => setTrackNumber(Number(e.target.value))} className="w-20 bg-[#161622] border border-white/[0.08] rounded-lg px-2 py-1 text-white" /></label>
+                  <label className="flex items-center gap-2 text-gray-300">Disc no. <input type="number" min={1} value={discNumber} onChange={(e) => setDiscNumber(Number(e.target.value))} className="w-20 bg-[#161622] border border-white/[0.08] rounded-lg px-2 py-1 text-white" /></label>
+                </div>
+                <label className="flex items-center gap-2 text-gray-300"><input type="checkbox" checked={explicitContent} onChange={(e) => setExplicitContent(e.target.checked)} /> Konten eksplisit</label>
+                <label className="flex items-start gap-2 text-gray-300 text-[11px]"><input type="checkbox" checked={rightsConfirmed} onChange={(e) => setRightsConfirmed(e.target.checked)} /> Saya memiliki atau berwenang mengelola hak distribusi untuk audio, komposisi, dan artwork yang diajukan.</label>
               </div>
 
               {/* Row 4: TikTok Audio Clip / Social Preview Start Time */}

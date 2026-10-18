@@ -24,6 +24,12 @@ export async function createAdapter(env: { DATABASE_URL?: string }): Promise<Dat
       const rows = await sql.query(text, values) as any[];
       return { rows };
     },
+    async transaction(queries: Array<{ text: string; values?: unknown[] }>): Promise<QueryResult[]> {
+      const results = await sql.transaction((transactionSql) =>
+        queries.map(({ text, values = [] }) => transactionSql.query(text, values)),
+      );
+      return results.map((rows) => ({ rows: rows as any[] }));
+    },
   };
   return new NeonAdapter(client);
 }

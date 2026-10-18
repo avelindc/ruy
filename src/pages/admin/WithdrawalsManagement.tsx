@@ -12,6 +12,7 @@ export default function WithdrawalsManagement() {
   const [refNo, setRefNo] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [modalMode, setModalMode] = useState<'pay' | 'reject' | null>(null);
+  const [processingId, setProcessingId] = useState<string | null>(null);
 
   const loadData = async () => {
     const result = await getAdminWithdrawalRequests(filterStatus);
@@ -35,26 +36,52 @@ export default function WithdrawalsManagement() {
     setModalMode('reject');
   };
 
+  const handleApprove = async (wd: WithdrawalRecord) => {
+    setProcessingId(wd.id);
+    setErrorMsg('');
+    try {
+      const result = await updateAdminWithdrawal(wd.id, 'approved');
+      if (result.error) { setErrorMsg(result.error.message); return; }
+      setSuccessMsg(`Withdrawal request for ${wd.user_name} approved and reserved for payout.`);
+      await loadData();
+      setTimeout(() => setSuccessMsg(''), 5000);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
   const confirmPay = async () => {
     if (!selectedWd || !refNo.trim()) return;
-    const result = await updateAdminWithdrawal(selectedWd.id, 'paid', refNo.trim());
-    if (result.error) { setErrorMsg(result.error.message); return; }
-    setSuccessMsg(`Withdrawal for ${selectedWd.user_name} ($${selectedWd.amount.toFixed(2)} ${selectedWd.currency}) marked as paid.`);
-    setModalMode(null);
-    setSelectedWd(null);
-    await loadData();
-    setTimeout(() => setSuccessMsg(''), 5000);
+    setProcessingId(selectedWd.id);
+    setErrorMsg('');
+    try {
+      const result = await updateAdminWithdrawal(selectedWd.id, 'paid', refNo.trim());
+      if (result.error) { setErrorMsg(result.error.message); return; }
+      setSuccessMsg(`Withdrawal for ${selectedWd.user_name} ($${selectedWd.amount.toFixed(2)} ${selectedWd.currency}) marked as paid.`);
+      setModalMode(null);
+      setSelectedWd(null);
+      await loadData();
+      setTimeout(() => setSuccessMsg(''), 5000);
+    } finally {
+      setProcessingId(null);
+    }
   };
 
   const confirmReject = async () => {
     if (!selectedWd || !rejectReason.trim()) return;
-    const result = await updateAdminWithdrawal(selectedWd.id, 'rejected', rejectReason.trim());
-    if (result.error) { setErrorMsg(result.error.message); return; }
-    setSuccessMsg(`Withdrawal request for ${selectedWd.user_name} was rejected.`);
-    setModalMode(null);
-    setSelectedWd(null);
-    await loadData();
-    setTimeout(() => setSuccessMsg(''), 5000);
+    setProcessingId(selectedWd.id);
+    setErrorMsg('');
+    try {
+      const result = await updateAdminWithdrawal(selectedWd.id, 'rejected', rejectReason.trim());
+      if (result.error) { setErrorMsg(result.error.message); return; }
+      setSuccessMsg(`Withdrawal request for ${selectedWd.user_name} was rejected.`);
+      setModalMode(null);
+      setSelectedWd(null);
+      await loadData();
+      setTimeout(() => setSuccessMsg(''), 5000);
+    } finally {
+      setProcessingId(null);
+    }
   };
 
   const filtered = withdrawals.filter((w) => {
@@ -67,7 +94,7 @@ export default function WithdrawalsManagement() {
   });
 
   const totalPending = withdrawals
-    .filter(w => w.status === 'pending')
+    .filter(w => ['pending', 'under_review', 'approved', 'processing'].includes(w.status))
     .reduce((sum, w) => sum + w.amount, 0);
 
   return (
@@ -106,6 +133,7 @@ export default function WithdrawalsManagement() {
           {[
             { id: 'all', label: 'Semua' },
             { id: 'pending', label: 'Perlu Transfer' },
+            { id: 'approved', label: 'Disetujui' },
             { id: 'paid', label: 'Sudah Ditransfer' },
             { id: 'rejected', label: 'Ditolak' },
           ].map((tab) => (
@@ -176,16 +204,37 @@ export default function WithdrawalsManagement() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {w.status === 'pending' ? (
+                  {w.status === 'pending' || w.status === 'under_review' ? (
                     <>
                       <button
-                        onClick={() => handleOpenPay(w)}
+                        disabled={processingId === w.id}
+                        onClick={() => handleApprove(w)}
                         className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md hover:scale-105 active:scale-95 flex items-center gap-1.5"
                       >
                         <Check className="w-3.5 h-3.5" />
-                        <span>Tandai Sudah Ditransfer (Mark Paid)</span>
+                        <span>{processingId === w.id ? 'Memproses…' : 'Setujui Penarikan'}</span>
                       </button>
                       <button
+                        disabled={processingId === w.id}
+                        onClick={() => handleOpenReject(w)}
+                        className="px-3.5 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 text-rose-300 text-xs font-bold transition-all"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Tolak</span>
+                      </button>
+                    </>
+                  ) : w.status === 'approved' || w.status === 'processing' ? (
+                    <>
+                      <button
+                        disabled={processingId === w.id}
+                        onClick={() => handleOpenPay(w)}
+                        className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Tandai Sudah Ditransfer</span>
+                      </button>
+                      <button
+                        disabled={processingId === w.id}
                         onClick={() => handleOpenReject(w)}
                         className="px-3.5 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 text-rose-300 text-xs font-bold transition-all"
                       >
@@ -245,8 +294,8 @@ export default function WithdrawalsManagement() {
               <button onClick={() => setModalMode(null)} className="px-4 py-2 rounded-xl bg-white/[0.06] text-gray-300 text-xs font-semibold">
                 Batal
               </button>
-              <button onClick={confirmPay} className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">
-                Tandai Berhasil Ditransfer
+              <button disabled={processingId === selectedWd.id} onClick={confirmPay} className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50">
+                {processingId === selectedWd.id ? 'Memproses…' : 'Tandai Berhasil Ditransfer'}
               </button>
             </div>
           </div>
@@ -273,8 +322,8 @@ export default function WithdrawalsManagement() {
               <button onClick={() => setModalMode(null)} className="px-4 py-2 rounded-xl bg-white/[0.06] text-gray-300 text-xs font-semibold">
                 Batal
               </button>
-              <button onClick={confirmReject} className="px-5 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold">
-                Tolak Penarikan
+              <button disabled={processingId === selectedWd.id} onClick={confirmReject} className="px-5 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold disabled:opacity-50">
+                {processingId === selectedWd.id ? 'Memproses…' : 'Tolak Penarikan'}
               </button>
             </div>
           </div>

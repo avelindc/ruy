@@ -74,6 +74,18 @@ export interface UploadResult {
   verified: boolean;
 }
 
+/** Request a five-minute bearer URL for the authenticated owner/admin to preview a master file. */
+export async function getSignedPrivateMediaUrl(fileUrl: string): Promise<string> {
+  const parsed = new URL(fileUrl, window.location.origin);
+  const marker = '/api/storage/';
+  const index = parsed.pathname.indexOf(marker);
+  if (index < 0) throw new Error('Audio file URL is not managed by the Breakout Music Worker.');
+  const fileKey = decodeURIComponent(parsed.pathname.slice(index + marker.length));
+  const response = await apiPost<{ url: string }>('/api/storage/sign', { fileKey });
+  if (!response.success || !response.data?.url) throw new Error(response.error || 'Tidak dapat membuat akses preview audio.');
+  return response.data.url;
+}
+
 /**
  * Upload audio or image file to verified storage backend with progress tracking
  */
@@ -141,25 +153,30 @@ export async function uploadReleaseFile(
 /**
  * Create new release
  */
-export async function createRelease(
-  userId: string,
-  releaseData: Partial<Release> & {
-    title: string;
-    release_type?: 'single' | 'ep' | 'album';
-    primary_artist_id?: string;
-    cover_artwork_url?: string;
-    artwork_url?: string;
-    genre?: string;
-    release_date?: string;
-    tracks?: any[];
-  }
-) {
+export type ReleaseMutation = Partial<Release> & {
+  title: string;
+  release_type?: 'single' | 'ep' | 'album';
+  primary_artist_id?: string;
+  cover_artwork_url?: string;
+  artwork_url?: string;
+  genre?: string;
+  language?: string;
+  release_date?: string;
+  release_version?: string;
+  subgenre?: string;
+  original_release_date?: string;
+  featured_artists?: string[];
+  self_released?: boolean;
+  copyright_c?: string;
+  copyright_p?: string;
+  notes?: string;
+  distribution_rights_confirmed?: boolean;
+  tracks?: Array<Record<string, unknown>>;
+};
+
+export async function createRelease(_userId: string, releaseData: ReleaseMutation) {
   try {
-    const response = await apiPost<Release>(`/api/releases`, {
-      owner_id: userId,
-      status: 'draft',
-      ...releaseData,
-    });
+    const response = await apiPost<Release>(`/api/releases`, releaseData);
 
     if (!response.success) {
       throw new Error(response.error || 'Failed to create release');
@@ -175,7 +192,7 @@ export async function createRelease(
 /**
  * Update release
  */
-export async function updateRelease(id: string, releaseData: Partial<Release> & { tracks?: any[] }) {
+export async function updateRelease(id: string, releaseData: ReleaseMutation) {
   try {
     const response = await apiPut<Release>(`/api/releases/${encodeURIComponent(id)}`, releaseData);
 
@@ -228,12 +245,13 @@ export async function submitReleaseForReview(id: string) {
 
 /**
  * Get release status history
- * TODO: Implement when status history table is added to adapter
+ * Read the release status history recorded by the Worker transition.
  */
 export async function getReleaseHistory(_releaseId: string) {
   try {
-    // For now, return empty array as status history is not yet in the Neon adapter
-    return { data: [], error: null };
+    const response = await apiGet<any[]>(`/api/releases/${encodeURIComponent(_releaseId)}/history`);
+    if (!response.success) throw new Error(response.error || 'Failed to fetch release history');
+    return { data: response.data || [], error: null };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch release history';
     return { data: [], error: new Error(message) };

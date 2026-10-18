@@ -7,6 +7,7 @@
 
 interface SqlClient {
   query(text: string, values?: unknown[]): Promise<{ rows: any[] }>;
+  transaction?(queries: Array<{ text: string; values?: unknown[] }>): Promise<Array<{ rows: any[] }>>;
 }
 import type {
   DatabaseAdapter,
@@ -33,6 +34,7 @@ import type {
   CmsScrollytelling,
   CmsScrollytellingFrame,
   CmsScrollytellingStep,
+  RoyaltyRuleInput,
 } from '../types/database';
 import { NotFoundError, ValidationError } from '../types/database';
 import {
@@ -43,6 +45,15 @@ import {
   transformNeonStreaming,
   transformNeonRoyalty,
 } from './transformers';
+
+function cleanStringList(values?: string[]): string[] {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function validPositiveInteger(value?: number): number | null {
+  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
 
 export class NeonAdapter implements DatabaseAdapter {
   constructor(private client: SqlClient) {}
@@ -335,7 +346,7 @@ export class NeonAdapter implements DatabaseAdapter {
     let tracks: any[] = [];
     try {
       const trackRes = await this.client.query(
-        'SELECT id, title, "audioUrl", isrc, "tiktokClipStart" FROM "Track" WHERE "releaseId" = $1 ORDER BY "createdAt" ASC',
+        'SELECT * FROM "Track" WHERE "releaseId" = $1 ORDER BY "createdAt" ASC, id',
         [row.id]
       );
       tracks = trackRes.rows.map((t: any) => ({
@@ -344,7 +355,30 @@ export class NeonAdapter implements DatabaseAdapter {
         audio_url: t.audioUrl,
         isrc: t.isrc,
         tiktok_clip_start: t.tiktokClipStart,
+        track_version: t.trackVersion || undefined,
+        primary_artist: t.primaryArtist || artistName,
+        featured_artists: t.featuredArtists || [],
+        composers: t.composerNames || [],
+        songwriters: t.songwriterNames || [],
+        producers: t.producerNames || [],
+        arrangers: t.arrangerNames || [],
+        track_number: t.trackNumber || undefined,
+        disc_number: t.discNumber || undefined,
+        genre: t.genre || row.genre || undefined,
+        language: t.language || row.language || undefined,
+        explicit_content: Boolean(t.explicitContent),
+        rights_ownership: t.rightsOwnership || undefined,
+        distribution_rights_confirmed: Boolean(t.distributionRightsConfirmed),
       }));
+    } catch {}
+
+    let featuredArtists: string[] = [];
+    try {
+      const contributors = await this.client.query(
+        'SELECT name FROM "ReleaseContributor" WHERE "releaseId" = $1 AND role = $2 ORDER BY position',
+        [row.id, 'featured_artist'],
+      );
+      featuredArtists = contributors.rows.map((contributor) => contributor.name);
     } catch {}
 
     // Owner info
@@ -377,6 +411,14 @@ export class NeonAdapter implements DatabaseAdapter {
       cover_artwork_url: row.coverArtworkUrl,
       cover_url: row.coverArtworkUrl,
       artwork_url: row.coverArtworkUrl,
+      featured_artists: featuredArtists,
+      release_version: row.releaseVersion || undefined,
+      subgenre: row.subgenre || undefined,
+      original_release_date: row.originalReleaseDate || undefined,
+      copyright_c: row.copyrightC || undefined,
+      copyright_p: row.copyrightP || undefined,
+      notes: row.notes || undefined,
+      rejection_reason: row.rejectionReason || undefined,
       tracks,
       audio_url: tracks[0]?.audio_url || '',
       audio_name: tracks[0]?.title ? `${tracks[0].title}.mp3` : (row.title ? `${row.title}.mp3` : ''),
@@ -447,7 +489,7 @@ export class NeonAdapter implements DatabaseAdapter {
     const ownerId = artistResult.rows[0]?.userId || artistId;
 
     return {
-      data: result.rows.map((row) => transformNeonRelease(row, ownerId)),
+      data: await Promise.all(result.rows.map((row) => this.enrichNeonRelease(row, ownerId))),
       total,
     };
   }
@@ -468,21 +510,26 @@ export class NeonAdapter implements DatabaseAdapter {
     }
 
     const typeStr = data.release_type ? data.release_type.toUpperCase() : 'SINGLE';
-    const releaseType = ['SINGLE', 'EP', 'ALBUM'].includes(typeStr) ? typeStr : 'SINGLE';
+    if (!['SINGLE', 'EP', 'ALBUM'].includes(typeStr)) throw new ValidationError('Invalid release type.');
+    const releaseType = typeStr;
     const releaseDate = data.release_date || new Date().toISOString();
     const artworkUrl = data.artwork_url || data.cover_artwork_url || '';
 
-    const query = `
+    const releaseId = crypto.randomUUID();
+    const releaseQuery = `
       INSERT INTO "Release" (
         "id", "artistId", "title", "type", "genre", "language", "primaryArtist",
         "releaseDate", "coverArtworkUrl", "status", "isImported", "upc",
-        "createdAt", "updatedAt"
+        "releaseVersion", subgenre, "originalReleaseDate", "selfReleased", "copyrightC", "copyrightP",
+        notes, "distributionRightsConfirmed", "createdAt", "updatedAt"
       )
-      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', false, $9, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING', false, $10,
+        $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())
       RETURNING *
     `;
 
-    const result = await this.client.query(query, [
+    const queries: Array<{ text: string; values?: unknown[] }> = [{ text: releaseQuery, values: [
+      releaseId,
       artistId,
       data.title,
       releaseType,
@@ -492,123 +539,202 @@ export class NeonAdapter implements DatabaseAdapter {
       releaseDate,
       artworkUrl,
       data.upc || null,
-    ]);
+      data.release_version?.trim() || null,
+      data.subgenre?.trim() || null,
+      data.original_release_date || null,
+      data.self_released === true,
+      data.copyright_c?.trim() || null,
+      data.copyright_p?.trim() || null,
+      data.notes?.trim() || null,
+      data.distribution_rights_confirmed === true,
+    ] }];
 
-    if (result.rows.length === 0) {
-      throw new Error('Failed to create release');
+    const contributors = cleanStringList(data.featured_artists);
+    queries.push({
+      text: 'DELETE FROM "ReleaseContributor" WHERE "releaseId" = $1 AND role = $2',
+      values: [releaseId, 'featured_artist'],
+    });
+    contributors.forEach((name, index) => queries.push({
+      text: 'INSERT INTO "ReleaseContributor" ("releaseId", role, name, position) VALUES ($1, $2, $3, $4)',
+      values: [releaseId, 'featured_artist', name, index],
+    }));
+
+    for (const track of data.tracks || []) {
+      queries.push({
+        text: `INSERT INTO "Track" (
+          "id", "releaseId", "title", "audioUrl", "isrc", "upc", "trackVersion", "primaryArtist",
+          "featuredArtists", "composerNames", "songwriterNames", "producerNames", "arrangerNames",
+          "trackNumber", "discNumber", "rightsOwnership", "distributionRightsConfirmed", genre, language,
+          "explicitContent", "createdAt", "updatedAt"
+        ) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW())`,
+        values: [
+          releaseId,
+          track.title || data.title,
+          track.audio_url || track.audioUrl || '',
+          track.isrc || null,
+          track.upc || null,
+          track.track_version?.trim() || null,
+          track.primary_artist?.trim() || artistName,
+          cleanStringList(track.featured_artists),
+          cleanStringList(track.composers),
+          cleanStringList(track.songwriters),
+          cleanStringList(track.producers),
+          cleanStringList(track.arrangers),
+          validPositiveInteger(track.track_number),
+          validPositiveInteger(track.disc_number) || 1,
+          track.rights_ownership?.trim() || null,
+          track.distribution_rights_confirmed === true,
+          track.genre?.trim() || data.genre || null,
+          track.language?.trim() || data.language || null,
+          track.explicit_content === true,
+        ],
+      });
     }
 
-    const createdRelease = result.rows[0];
-
-    // If tracks are provided with the release, create them in "Track" table
-    if (data.tracks && Array.isArray(data.tracks) && data.tracks.length > 0) {
-      for (const t of data.tracks) {
-        await this.client.query(`
-          INSERT INTO "Track" (
-            "id", "releaseId", "title", "audioUrl", "isrc", "upc", "createdAt", "updatedAt"
-          )
-          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW(), NOW())
-        `, [
-          createdRelease.id,
-          t.title || data.title,
-          t.audio_url || t.audioUrl || '',
-          t.isrc || null,
-          t.upc || null,
-        ]);
-      }
+    if (!this.client.transaction) {
+      throw new Error('Neon transaction support is required to create a release safely.');
     }
+    const results = await this.client.transaction(queries);
+    const createdRelease = results[0]?.rows[0];
+    if (!createdRelease) throw new Error('Failed to create release');
 
     return transformNeonRelease(createdRelease, ownerId);
   }
 
-  async updateRelease(releaseId: string, data: Partial<ReleaseInput> & { status?: string }): Promise<Release> {
+  async updateRelease(releaseId: string, data: Partial<ReleaseInput>): Promise<Release> {
+    if (!this.client.transaction) {
+      throw new Error('Neon transaction support is required to update a release safely.');
+    }
+    const currentResult = await this.client.query('SELECT * FROM "Release" WHERE id = $1', [releaseId]);
+    if (!currentResult.rows.length) throw new NotFoundError(`Release ${releaseId} not found`);
+    const current = currentResult.rows[0];
+
     const updates: string[] = [];
     const values: any[] = [releaseId];
     let paramIndex = 2;
+    const fields: Array<[keyof ReleaseInput, string, unknown]> = [
+      ['title', 'title', data.title?.trim()],
+      ['upc', 'upc', data.upc?.trim() || null],
+      ['genre', 'genre', data.genre?.trim() || null],
+      ['language', 'language', data.language?.trim() || null],
+      ['release_date', '"releaseDate"', data.release_date],
+      ['release_version', '"releaseVersion"', data.release_version?.trim() || null],
+      ['subgenre', 'subgenre', data.subgenre?.trim() || null],
+      ['original_release_date', '"originalReleaseDate"', data.original_release_date || null],
+      ['label_name', 'distributor', data.self_released ? 'Self-released' : data.label_name?.trim() || null],
+      ['artwork_url', '"coverArtworkUrl"', data.artwork_url ?? data.cover_artwork_url],
+      ['self_released', '"selfReleased"', data.self_released],
+      ['copyright_c', '"copyrightC"', data.copyright_c?.trim() || null],
+      ['copyright_p', '"copyrightP"', data.copyright_p?.trim() || null],
+      ['notes', 'notes', data.notes?.trim() || null],
+      ['distribution_rights_confirmed', '"distributionRightsConfirmed"', data.distribution_rights_confirmed],
+    ];
+    for (const [inputKey, column, value] of fields) {
+      if (Object.prototype.hasOwnProperty.call(data, inputKey) && value !== undefined) {
+        updates.push(`${column} = $${paramIndex++}`);
+        values.push(value);
+      }
+    }
+    if (data.release_type) {
+      const type = data.release_type.toUpperCase();
+      if (!['SINGLE', 'EP', 'ALBUM'].includes(type)) throw new ValidationError('Invalid release type.');
+      updates.push(`type = $${paramIndex++}`);
+      values.push(type);
+    }
+    updates.push('"updatedAt" = NOW()');
+    const pendingPredicate = `id = $1 AND status IN ('PENDING', 'REJECTED')`;
+    const queries: Array<{ text: string; values?: unknown[] }> = [{
+      text: `UPDATE "Release" SET ${updates.join(', ')} WHERE ${pendingPredicate} RETURNING *`,
+      values,
+    }];
 
-    if (data.title) {
-      updates.push(`"title" = $${paramIndex++}`);
-      values.push(data.title);
+    if (Array.isArray(data.featured_artists)) {
+      queries.push({
+        text: `DELETE FROM "ReleaseContributor" WHERE "releaseId" = $1 AND role = $2
+          AND EXISTS (SELECT 1 FROM "Release" WHERE ${pendingPredicate})`,
+        values: [releaseId, 'featured_artist'],
+      });
+      cleanStringList(data.featured_artists).forEach((name, index) => queries.push({
+        text: `INSERT INTO "ReleaseContributor" ("releaseId", role, name, position)
+          SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM "Release" WHERE ${pendingPredicate})`,
+        values: [releaseId, 'featured_artist', name, index],
+      }));
     }
-    if (data.upc) {
-      updates.push(`"upc" = $${paramIndex++}`);
-      values.push(data.upc);
-    }
-    if (data.genre) {
-      updates.push(`"genre" = $${paramIndex++}`);
-      values.push(data.genre);
-    }
-    const coverUrl = data.artwork_url || data.cover_artwork_url;
-    if (coverUrl !== undefined) {
-      updates.push(`"coverArtworkUrl" = $${paramIndex++}`);
-      values.push(coverUrl);
-    }
-    if (data.status) {
-      let pgStatus = 'PENDING';
-      const s = data.status.toLowerCase();
-      if (s === 'submitted' || s === 'review' || s === 'in_review') pgStatus = 'REVIEW';
-      else if (s === 'approved') pgStatus = 'APPROVED';
-      else if (s === 'rejected') pgStatus = 'REJECTED';
-      else if (s === 'processing' || s === 'delivered') pgStatus = 'PROCESSING';
-      else if (s === 'released' || s === 'live') pgStatus = 'RELEASED';
-      updates.push(`"status" = $${paramIndex++}`);
-      values.push(pgStatus);
-    }
-
-    updates.push(`"updatedAt" = NOW()`);
-
-    const query = `UPDATE "Release" SET ${updates.join(', ')} WHERE id = $1 RETURNING *`;
-    const result = await this.client.query(query, values);
-
-    if (result.rows.length === 0) {
-      throw new NotFoundError(`Release ${releaseId} not found`);
-    }
-
-    // If tracks were provided, update or insert them
-    if (data.tracks && Array.isArray(data.tracks) && data.tracks.length > 0) {
-      for (const t of data.tracks) {
-        const existingTrack = await this.client.query('SELECT id FROM "Track" WHERE "releaseId" = $1 LIMIT 1', [releaseId]);
-        if (existingTrack.rows.length > 0) {
-          await this.client.query(`
-            UPDATE "Track"
-            SET "title" = COALESCE($2, "title"),
-                "audioUrl" = COALESCE($3, "audioUrl"),
-                "isrc" = COALESCE($4, "isrc"),
-                "updatedAt" = NOW()
-            WHERE id = $1
-          `, [
-            existingTrack.rows[0].id,
-            t.title || null,
-            t.audio_url || (t as any).audioUrl || null,
-            t.isrc || null,
-          ]);
+    if (Array.isArray(data.tracks)) {
+      const existing = await this.client.query(
+        'SELECT id FROM "Track" WHERE "releaseId" = $1 ORDER BY "createdAt", id', [releaseId],
+      );
+      const artistResult = await this.client.query('SELECT "stageName" FROM "Artist" WHERE id = $1', [current.artistId]);
+      const defaultArtist = artistResult.rows[0]?.stageName || '';
+      for (let i = 0; i < data.tracks.length; i += 1) {
+        const track = data.tracks[i];
+        const existingId = track.id || existing.rows[i]?.id;
+        if (existingId && !existing.rows.some((row) => row.id === existingId)) {
+          throw new ValidationError('Track does not belong to this release.');
+        }
+        const parameters = [
+          track.title?.trim() || current.title,
+          track.audio_url ?? track.audioUrl ?? null,
+          track.isrc?.trim() || null,
+          track.upc?.trim() || null,
+          track.track_version?.trim() || null,
+          track.primary_artist?.trim() || defaultArtist,
+          cleanStringList(track.featured_artists),
+          cleanStringList(track.composers),
+          cleanStringList(track.songwriters),
+          cleanStringList(track.producers),
+          cleanStringList(track.arrangers),
+          validPositiveInteger(track.track_number),
+          validPositiveInteger(track.disc_number) || 1,
+          track.rights_ownership?.trim() || null,
+          track.distribution_rights_confirmed === true,
+          track.genre?.trim() || current.genre || null,
+          track.language?.trim() || current.language || null,
+          track.explicit_content === true,
+        ];
+        if (existingId) {
+          queries.push({ text: `
+            UPDATE "Track" SET title = $3, "audioUrl" = COALESCE($4, "audioUrl"), isrc = COALESCE($5, isrc), upc = COALESCE($6, upc),
+              "trackVersion" = $7, "primaryArtist" = $8, "featuredArtists" = $9, "composerNames" = $10,
+              "songwriterNames" = $11, "producerNames" = $12, "arrangerNames" = $13, "trackNumber" = $14,
+              "discNumber" = $15, "rightsOwnership" = $16, "distributionRightsConfirmed" = $17,
+              genre = $18, language = $19, "explicitContent" = $20, "updatedAt" = NOW()
+            WHERE id = $1 AND "releaseId" = $2
+              AND EXISTS (SELECT 1 FROM "Release" WHERE id = $2 AND status IN ('PENDING', 'REJECTED'))
+          `, values: [existingId, releaseId, ...parameters] });
         } else {
-          await this.client.query(`
-            INSERT INTO "Track" (
-              "id", "releaseId", "title", "audioUrl", "isrc", "upc", "createdAt", "updatedAt"
-            )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW(), NOW())
-          `, [
-            releaseId,
-            t.title || result.rows[0].title,
-            t.audio_url || (t as any).audioUrl || '',
-            t.isrc || null,
-            t.upc || null,
-          ]);
+          queries.push({ text: `
+            INSERT INTO "Track" ("releaseId", title, "audioUrl", isrc, upc, "trackVersion", "primaryArtist", "featuredArtists",
+              "composerNames", "songwriterNames", "producerNames", "arrangerNames", "trackNumber", "discNumber", "rightsOwnership",
+              "distributionRightsConfirmed", genre, language, "explicitContent")
+            SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+            WHERE EXISTS (SELECT 1 FROM "Release" WHERE ${pendingPredicate})
+          `, values: [releaseId, ...parameters] });
         }
       }
     }
 
-    // Get artist owner
-    const artistResult = await this.client.query('SELECT "userId" FROM "Artist" WHERE id = $1', [result.rows[0].artistId]);
-    const ownerId = artistResult.rows[0]?.userId || result.rows[0].artistId;
-
-    return transformNeonRelease(result.rows[0], ownerId);
+    const results = await this.client.transaction(queries);
+    const release = results[0]?.rows[0];
+    if (!release) {
+      const statusResult = await this.client.query('SELECT status FROM "Release" WHERE id = $1', [releaseId]);
+      if (!statusResult.rows.length) throw new NotFoundError(`Release ${releaseId} not found`);
+      throw new ValidationError('Release metadata can only be changed while the release is a draft or rejected.');
+    }
+    const artistResult = await this.client.query('SELECT "userId" FROM "Artist" WHERE id = $1', [release.artistId]);
+    return this.enrichNeonRelease(release, artistResult.rows[0]?.userId || release.artistId);
   }
 
   async deleteRelease(releaseId: string): Promise<void> {
-    const query = 'DELETE FROM "Release" WHERE id = $1';
-    await this.client.query(query, [releaseId]);
+    const result = await this.client.query(
+      'DELETE FROM "Release" WHERE id = $1 AND status IN (\'PENDING\', \'REJECTED\') RETURNING id',
+      [releaseId],
+    );
+    if (!result.rows.length) {
+      const status = await this.client.query('SELECT status FROM "Release" WHERE id = $1', [releaseId]);
+      if (!status.rows.length) throw new NotFoundError(`Release ${releaseId} not found`);
+      throw new ValidationError('Only draft or rejected releases can be deleted.');
+    }
   }
 
   async getReleasByUpc(upc: string): Promise<Release | null> {
@@ -821,6 +947,14 @@ export class NeonAdapter implements DatabaseAdapter {
     return result.rows[0]?.found === true;
   }
 
+  async hasStreamingIdentityDuplicate(sourceRowIdentity: string): Promise<boolean> {
+    const result = await this.client.query(
+      'SELECT EXISTS (SELECT 1 FROM "Streaming" WHERE "sourceRowReference" = $1) AS found',
+      [sourceRowIdentity],
+    );
+    return result.rows[0]?.found === true;
+  }
+
   async getStreamingRecordsByImport(importId: string, limit: number, offset: number): Promise<StreamingRecord[]> {
     const result = await this.client.query(
       'SELECT * FROM "Streaming" WHERE "reportId" = $1 ORDER BY "createdAt" DESC LIMIT $2 OFFSET $3',
@@ -831,8 +965,9 @@ export class NeonAdapter implements DatabaseAdapter {
 
   async createStreamingRecord(data: StreamingRecord): Promise<StreamingRecord> {
     const query = `
-      INSERT INTO "Streaming" ("id", "trackId", "releaseId", "reportId", "platform", "country", "playCount", "date", "revenue", "currency", "sourceRowHash", "createdAt", "updatedAt")
-      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+      INSERT INTO "Streaming" ("id", "trackId", "releaseId", "reportId", "platform", "country", "playCount", "date", "revenue", "currency", "sourceRowHash", "grossRevenue", deductions, "netRevenue", "sourceRowReference", "periodStart", "periodEnd", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
+      ON CONFLICT DO NOTHING
       RETURNING *
     `;
 
@@ -847,10 +982,16 @@ export class NeonAdapter implements DatabaseAdapter {
       data.revenue ?? null,
       data.currency || 'USD',
       data.source_row_hash || null,
+      data.revenue ?? null,
+      data.deductions ?? null,
+      data.net_revenue ?? null,
+      data.source_row_reference || null,
+      data.report_period_start || null,
+      data.report_period_end || null,
     ]);
 
     if (result.rows.length === 0) {
-      throw new Error('Failed to create streaming record');
+      throw new Error('DUPLICATE_SOURCE_ROW');
     }
 
     return transformNeonStreaming(result.rows[0], data.isrc);
@@ -913,10 +1054,15 @@ export class NeonAdapter implements DatabaseAdapter {
     const royalties: RoyaltyEntry[] = [];
     for (const row of result.rows) {
       const trackResult = await this.client.query(
-        'SELECT id FROM "Track" WHERE LOWER("title") LIKE LOWER($1) LIMIT 1',
-        [`%${row.songName}%`]
+        `SELECT t.id FROM "Track" t
+         JOIN "Release" r ON r.id = t."releaseId"
+         WHERE r."artistId" = $1 AND LOWER(t.title) = LOWER($2)
+         ORDER BY t.id LIMIT 2`,
+        [artistId, row.songName],
       );
-      const trackId = trackResult.rows[0]?.id;
+      // Legacy royalties are grouped by song name, so only link when the
+      // title identifies exactly one track belonging to this artist.
+      const trackId = trackResult.rows.length === 1 ? trackResult.rows[0].id : undefined;
 
       royalties.push(transformNeonRoyalty(row, trackId));
     }
@@ -952,14 +1098,120 @@ export class NeonAdapter implements DatabaseAdapter {
     return royalties;
   }
 
-  async createRoyaltyEntry(data: RoyaltyEntry): Promise<RoyaltyEntry> {
-    throw new Error('Royalty creation via adapter not yet implemented.');
-  }
-
   async getRoyaltyTotal(artistId: string): Promise<number> {
     const query = 'SELECT SUM("totalRevenue") as total FROM "Royalty" WHERE "artistId" = $1';
     const result = await this.client.query(query, [artistId]);
     return result.rows[0]?.total || 0;
+  }
+
+  async getRoyaltyCalculationItemsForOwner(userId: string, limit = 100, offset = 0): Promise<{ data: any[]; total: number }> {
+    const ownerPredicate = `FROM "RoyaltyCalculationItem" i
+      JOIN "Track" t ON t.id = i."trackId"
+      JOIN "Release" r ON r.id = i."releaseId" AND r.id = t."releaseId"
+      JOIN "Artist" a ON a.id = i."artistId" AND a.id = r."artistId"
+      JOIN "RoyaltyCalculationBatch" b ON b.id = i."batchId"
+      WHERE a."userId" = $1 AND b.status = 'completed'`;
+    const count = await this.client.query(`SELECT COUNT(*)::int AS total ${ownerPredicate}`, [userId]);
+    const result = await this.client.query(`
+      SELECT i.id, i."trackId", t.title AS "trackTitle", t.isrc,
+        i."releaseId", r.title AS "releaseTitle", i."artistId", a."stageName" AS "artistName",
+        i.platform, i."periodStart", i.streams, i."grossRevenue", i.deductions, i."netRevenue",
+        i."sharePercent", i."royaltyAmount", i.currency, b.status AS "batchStatus", b."completedAt"
+      ${ownerPredicate}
+      ORDER BY i."periodStart" DESC, i."createdAt" DESC, i.id DESC
+      LIMIT $2 OFFSET $3
+    `, [userId, Math.min(Math.max(limit, 1), 500), Math.max(offset, 0)]);
+    return {
+      total: Number(count.rows[0]?.total || 0),
+      data: result.rows.map((row) => ({
+        id: row.id, track_id: row.trackId, track_title: row.trackTitle || '', isrc: row.isrc || '',
+        release_id: row.releaseId, release_title: row.releaseTitle || '', artist_id: row.artistId,
+        artist_name: row.artistName || '', platform: row.platform,
+        period_start: row.periodStart instanceof Date ? row.periodStart.toISOString().slice(0, 10) : String(row.periodStart).slice(0, 10),
+        streams: Number(row.streams), gross_revenue: Number(row.grossRevenue), deductions: Number(row.deductions),
+        net_revenue: Number(row.netRevenue), share_percent: Number(row.sharePercent),
+        amount: Number(row.royaltyAmount), currency: row.currency, status: row.batchStatus, completed_at: row.completedAt,
+      })),
+    };
+  }
+
+  async listRoyaltyRules(artistId?: string): Promise<any[]> {
+    const result = await this.client.query(`
+      SELECT rr.*, a."stageName" AS "artistName", u.full_name AS "createdByName"
+      FROM "RoyaltyRule" rr
+      JOIN "Artist" a ON a.id = rr."artistId"
+      LEFT JOIN users u ON u.id = rr."createdBy"
+      WHERE ($1::uuid IS NULL OR rr."artistId" = $1::uuid)
+      ORDER BY rr."effectiveFrom" DESC, rr."createdAt" DESC
+    `, [artistId || null]);
+    return result.rows.map((row) => ({
+      id: row.id, artist_id: row.artistId, artist_name: row.artistName || '', platform: row.platform,
+      share_percent: Number(row.sharePercent), revenue_basis: row.revenueBasis, currency: row.currency,
+      effective_from: row.effectiveFrom, effective_until: row.effectiveUntil || undefined,
+      created_by: row.createdBy, created_by_name: row.createdByName || undefined, created_at: row.createdAt,
+    }));
+  }
+
+  async createRoyaltyRule(data: RoyaltyRuleInput, adminId: string): Promise<any> {
+    const result = await this.client.query(
+      'SELECT (public.create_royalty_rule($1::uuid, $2, $3::numeric, $4, $5, $6::date, $7::date, $8::uuid)).*',
+      [data.artist_id, data.platform, data.share_percent, data.revenue_basis, data.currency,
+        data.effective_from, data.effective_until || null, adminId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('Royalty rule was not created.');
+    return {
+      id: row.id, artist_id: row.artistId, platform: row.platform, share_percent: Number(row.sharePercent),
+      revenue_basis: row.revenueBasis, currency: row.currency, effective_from: row.effectiveFrom,
+      effective_until: row.effectiveUntil || undefined, created_by: row.createdBy, created_at: row.createdAt,
+    };
+  }
+
+  async processStreamingReportRoyalties(reportId: string, adminId: string): Promise<string> {
+    const result = await this.client.query(
+      'SELECT public.process_streaming_report_royalties($1::uuid, $2::uuid) AS batch_id',
+      [reportId, adminId],
+    );
+    const batchId = result.rows[0]?.batch_id;
+    if (!batchId) throw new Error('Royalty processing returned no batch identifier.');
+    return String(batchId);
+  }
+
+  async getFinancialLedger(userId?: string, limit = 100, offset = 0): Promise<{ data: any[]; total: number }> {
+    const count = await this.client.query(
+      'SELECT COUNT(*)::int AS total FROM "FinancialLedgerEntry" WHERE ($1::uuid IS NULL OR "userId" = $1::uuid)',
+      [userId || null],
+    );
+    const result = await this.client.query(`
+      SELECT l.*, u.email, u.full_name, a."stageName"
+      FROM "FinancialLedgerEntry" l
+      JOIN users u ON u.id = l."userId"
+      LEFT JOIN "Artist" a ON a.id = l."artistId"
+      WHERE ($1::uuid IS NULL OR l."userId" = $1::uuid)
+      ORDER BY l."createdAt" DESC, l.id DESC LIMIT $2 OFFSET $3
+    `, [userId || null, Math.min(Math.max(limit, 1), 500), Math.max(offset, 0)]);
+    return {
+      total: Number(count.rows[0]?.total || 0),
+      data: result.rows.map((row) => ({
+        id: row.id, user_id: row.userId, user_name: row.full_name || row.email,
+        artist_name: row.stageName || undefined, entry_type: row.entryType, amount: Number(row.amount),
+        currency: row.currency, reference_type: row.referenceType, reference_id: row.referenceId,
+        description: row.description || '', metadata: row.metadata || {}, created_at: row.createdAt,
+      })),
+    };
+  }
+
+  async getFinancialLedgerSummary(userId: string): Promise<Array<{ currency: string; balance: number; total_earned: number; total_withdrawn: number }>> {
+    const result = await this.client.query(`
+      SELECT currency, COALESCE(SUM(amount), 0)::numeric AS balance,
+        COALESCE(SUM(amount) FILTER (WHERE "entryType" IN ('royalty_credit', 'adjustment_credit')), 0)::numeric AS total_earned,
+        COALESCE(-SUM(amount) FILTER (WHERE "entryType" = 'withdrawal_debit'), 0)::numeric AS total_withdrawn
+      FROM "FinancialLedgerEntry" WHERE "userId" = $1 GROUP BY currency ORDER BY currency
+    `, [userId]);
+    return result.rows.map((row) => ({
+      currency: row.currency, balance: Number(row.balance),
+      total_earned: Number(row.total_earned), total_withdrawn: Number(row.total_withdrawn),
+    }));
   }
 
   // ========== ADMIN OPERATIONS ==========
@@ -1117,16 +1369,23 @@ export class NeonAdapter implements DatabaseAdapter {
 
   async createWithdrawal(data: Pick<Withdrawal, 'owner_id' | 'amount' | 'currency' | 'payout_method' | 'payout_reference'>): Promise<Withdrawal> {
     const result = await this.client.query(
-      `INSERT INTO "Withdrawal" ("userId", amount, currency, "payoutMethod", "payoutReference")
-       SELECT $1, $2, $3, $4, $5
-       WHERE $2 <= (
-         SELECT COALESCE(SUM(r."totalRevenue"), 0) - COALESCE((
-           SELECT SUM(w.amount) FROM "Withdrawal" w
-           WHERE w."userId" = $1 AND w.currency = $3
-             AND w.status NOT IN ('rejected', 'cancelled')
-         ), 0)
-         FROM "Royalty" r JOIN "Artist" a ON a.id = r."artistId" WHERE a."userId" = $1
-       ) RETURNING *`,
+      `WITH locked_user AS MATERIALIZED (
+         SELECT id FROM users WHERE id = $1 FOR UPDATE
+       ), available AS MATERIALIZED (
+         SELECT COALESCE(SUM(l.amount), 0) AS balance
+         FROM "FinancialLedgerEntry" l WHERE l."userId" = (SELECT id FROM locked_user) AND l.currency = $3
+       ), created AS (
+         INSERT INTO "Withdrawal" ("userId", amount, currency, "payoutMethod", "payoutReference")
+         SELECT $1, $2, $3, $4, $5 FROM locked_user, available WHERE $2::numeric <= available.balance
+         RETURNING *
+       ), reserved AS (
+         INSERT INTO "FinancialLedgerEntry" ("userId", "entryType", amount, currency, "referenceType", "referenceId",
+           "idempotencyKey", description, "createdBy")
+         SELECT created."userId", 'withdrawal_reserve', -created.amount, created.currency, 'withdrawal', created.id,
+           'withdrawal:' || created.id::text || ':reserve', 'Withdrawal request reserve', created."userId"
+         FROM created ON CONFLICT ("idempotencyKey") DO NOTHING RETURNING id
+       )
+       SELECT * FROM created`,
       [data.owner_id, data.amount, data.currency, data.payout_method, data.payout_reference || null],
     );
     const row = result.rows[0];
@@ -1147,20 +1406,52 @@ export class NeonAdapter implements DatabaseAdapter {
     reviewedBy?: string
   ): Promise<any> {
     const query = `
-      UPDATE "Withdrawal"
-      SET "status" = $1,
-          "rejectionReason" = CASE WHEN $1 = 'rejected' THEN $2 ELSE NULL END,
-          "transferReference" = CASE WHEN $1 = 'paid' THEN $2 ELSE "transferReference" END,
-          "reviewedBy" = $3, "reviewedAt" = NOW(),
-          "paidAt" = CASE WHEN $1 = 'paid' THEN NOW() ELSE "paidAt" END, "updatedAt" = NOW()
-      WHERE id = $4
-      RETURNING *
-    `;
+      WITH prior AS MATERIALIZED (
+        SELECT * FROM "Withdrawal" WHERE id = $4 FOR UPDATE
+      ), changed AS (
+        UPDATE "Withdrawal" w
+        SET "status" = $1,
+            "rejectionReason" = CASE WHEN $1 = 'rejected' THEN NULLIF(BTRIM($2), '') ELSE NULL END,
+            "transferReference" = CASE WHEN $1 = 'paid' THEN NULLIF(BTRIM($2), '') ELSE w."transferReference" END,
+            "reviewedBy" = $3::uuid, "reviewedAt" = NOW(),
+            "paidAt" = CASE WHEN $1 = 'paid' THEN NOW() ELSE w."paidAt" END, "updatedAt" = NOW()
+        FROM prior p WHERE w.id = p.id AND (
+          ($1 IN ('approved', 'rejected') AND p.status IN ('pending', 'under_review'))
+          OR ($1 = 'paid' AND p.status IN ('approved', 'processing'))
+          OR ($1 = 'rejected' AND p.status IN ('approved', 'processing'))
+        )
+        RETURNING w.*
+      ), ledger_lines AS (
+        SELECT c."userId", 'withdrawal_release'::text AS "entryType", c.amount AS amount, c.currency, c.id AS "referenceId",
+          'withdrawal:' || c.id::text || ':release' AS "idempotencyKey", $3::uuid AS "createdBy"
+        FROM changed c WHERE c.status = 'rejected'
+        UNION ALL
+        SELECT c."userId", 'withdrawal_release', c.amount, c.currency, c.id,
+          'withdrawal:' || c.id::text || ':release', $3::uuid
+        FROM changed c WHERE c.status = 'paid'
+        UNION ALL
+        SELECT c."userId", 'withdrawal_debit', -c.amount, c.currency, c.id,
+          'withdrawal:' || c.id::text || ':debit', $3::uuid
+        FROM changed c WHERE c.status = 'paid'
+      ), ledger AS (
+        INSERT INTO "FinancialLedgerEntry" ("userId", "entryType", amount, currency, "referenceType", "referenceId",
+          "idempotencyKey", description, "createdBy")
+        SELECT "userId", "entryType", amount, currency, 'withdrawal', "referenceId", "idempotencyKey",
+          'Withdrawal status settlement', "createdBy" FROM ledger_lines
+        ON CONFLICT ("idempotencyKey") DO NOTHING RETURNING id
+      ), audit AS (
+        INSERT INTO "AuditLog" ("actorId", action, "entityType", "entityId", metadata)
+        SELECT $3::uuid, 'withdrawal.status_changed', 'withdrawal', id,
+          jsonb_build_object('status', status, 'reason', $2) FROM changed RETURNING "entityId"
+      )
+      SELECT changed.* FROM changed`;
 
     const result = await this.client.query(query, [status, reason || null, reviewedBy || null, withdrawalId]);
 
     if (result.rows.length === 0) {
-      throw new NotFoundError(`Withdrawal ${withdrawalId} not found`);
+      const prior = await this.client.query('SELECT status FROM "Withdrawal" WHERE id = $1', [withdrawalId]);
+      if (prior.rows.length === 0) throw new NotFoundError(`Withdrawal ${withdrawalId} not found`);
+      throw new ValidationError(`Withdrawal cannot transition from ${prior.rows[0].status} to ${status}`);
     }
 
     const row = result.rows[0];
@@ -1272,44 +1563,78 @@ export class NeonAdapter implements DatabaseAdapter {
     reason?: string,
     actorId?: string
   ): Promise<any> {
-    // Get current status for history
-    const currentResult = await this.client.query('SELECT "status" FROM "Release" WHERE id = $1', [releaseId]);
-    if (currentResult.rows.length === 0) {
-      throw new NotFoundError(`Release ${releaseId} not found`);
+    const normalized = newStatus.toUpperCase();
+    if (!['REVIEW', 'APPROVED', 'REJECTED'].includes(normalized)) {
+      throw new ValidationError('Unsupported release status transition.');
+    }
+    if (normalized === 'REJECTED' && !reason?.trim()) {
+      throw new ValidationError('A rejection reason is required.');
+    }
+    const result = await this.client.query(`
+      WITH prior AS MATERIALIZED (
+        SELECT id, status FROM "Release" WHERE id = $1 FOR UPDATE
+      ), allowed AS (
+        SELECT id, status FROM prior
+        WHERE ($2 = 'REVIEW' AND status IN ('PENDING', 'REJECTED'))
+           OR ($2 IN ('APPROVED', 'REJECTED') AND status = 'REVIEW')
+      ), changed AS (
+        UPDATE "Release" AS r
+        SET status = $2,
+            "rejectionReason" = CASE WHEN $2 = 'REJECTED' THEN NULLIF(BTRIM($3), '') ELSE NULL END,
+            "reviewedBy" = CASE WHEN $2 IN ('APPROVED', 'REJECTED') THEN $4::uuid ELSE r."reviewedBy" END,
+            "reviewedAt" = CASE WHEN $2 IN ('APPROVED', 'REJECTED') THEN NOW() ELSE r."reviewedAt" END,
+            "updatedAt" = NOW()
+        FROM allowed p WHERE r.id = p.id
+        RETURNING r.*, p.status AS "previousStatus"
+      ), history AS (
+        INSERT INTO "ReleaseStatusHistory" ("releaseId", "previousStatus", "newStatus", reason, "actorId", "createdAt")
+        SELECT id, "previousStatus", status, NULLIF(BTRIM($3), ''), $4::uuid, NOW() FROM changed
+        RETURNING "releaseId"
+      ), audit AS (
+        INSERT INTO "AuditLog" ("actorId", action, "entityType", "entityId", metadata, "createdAt")
+        SELECT $4::uuid, 'release.status_changed', 'release', id,
+          jsonb_build_object('previousStatus', "previousStatus", 'status', status, 'reason', NULLIF(BTRIM($3), '')), NOW()
+        FROM changed
+        RETURNING "entityId"
+      )
+      SELECT changed.* FROM changed
+      JOIN history ON history."releaseId" = changed.id
+      JOIN audit ON audit."entityId" = changed.id
+    `, [releaseId, normalized, reason || null, actorId || null]);
+    if (!result.rows.length) {
+      const current = await this.client.query('SELECT status FROM "Release" WHERE id = $1', [releaseId]);
+      if (!current.rows.length) throw new NotFoundError(`Release ${releaseId} not found`);
+      throw new ValidationError(`Cannot change release status from ${current.rows[0].status} to ${normalized}.`);
     }
 
-    const previousStatus = currentResult.rows[0].status;
-
-    // Update release status
-    const updateQuery = 'UPDATE "Release" SET "status" = $1, "updatedAt" = NOW() WHERE id = $2 RETURNING *';
-    const updateResult = await this.client.query(updateQuery, [newStatus, releaseId]);
-
-    if (updateResult.rows.length === 0) {
-      throw new NotFoundError(`Release ${releaseId} not found`);
-    }
-
-    // Create status history entry (if table exists)
-    try {
-      const historyQuery = `
-        INSERT INTO "ReleaseStatusHistory" ("releaseId", "previousStatus", "newStatus", "reason", "actorId", "createdAt")
-        VALUES ($1, $2, $3, $4, $5, NOW())
-      `;
-      await this.client.query(historyQuery, [releaseId, previousStatus, newStatus, reason || null, actorId || null]);
-    } catch (error) {
-      // Table might not exist yet, continue anyway
-    }
-
-    const row = updateResult.rows[0];
+    const row = result.rows[0];
     const artistResult = await this.client.query('SELECT "userId" FROM "Artist" WHERE id = $1', [row.artistId]);
     const ownerId = artistResult.rows[0]?.userId || row.artistId;
 
-    return transformNeonRelease(row, ownerId);
+    return this.enrichNeonRelease(row, ownerId);
+  }
+
+  async getReleaseStatusHistory(releaseId: string) {
+    const result = await this.client.query(`
+      SELECT h."previousStatus", h."newStatus", h.reason, h."actorId", u.full_name AS "actorName", h."createdAt"
+      FROM "ReleaseStatusHistory" h
+      LEFT JOIN users u ON u.id = h."actorId"
+      WHERE h."releaseId" = $1 ORDER BY h."createdAt" DESC, h.id DESC
+    `, [releaseId]);
+    return result.rows.map((row) => ({
+      previous_status: row.previousStatus || undefined,
+      new_status: row.newStatus,
+      reason: row.reason || undefined,
+      actor_id: row.actorId || undefined,
+      actor_name: row.actorName || undefined,
+      created_at: row.createdAt,
+    }));
   }
 
   async createCsvImport(data: any): Promise<any> {
     const query = `
-      INSERT INTO "CsvImport" ("uploadedBy", "source", "filename", "fileHash", "status", "totalRows", "validRows", "invalidRows", "duplicateRows", "createdAt")
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+      INSERT INTO "CsvImport" ("uploadedBy", "source", "filename", "fileHash", "status", "totalRows", "validRows", "invalidRows", "duplicateRows", "reportIdentifier", "periodStart", "periodEnd", currency, "createdAt")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
       RETURNING *
     `;
 
@@ -1323,6 +1648,10 @@ export class NeonAdapter implements DatabaseAdapter {
       data.valid_rows || 0,
       data.invalid_rows || 0,
       data.duplicate_rows || 0,
+      data.report_identifier || null,
+      data.period_start || null,
+      data.period_end || null,
+      data.currency ?? null,
     ]);
 
     if (result.rows.length === 0) {
@@ -1341,6 +1670,10 @@ export class NeonAdapter implements DatabaseAdapter {
       valid_rows: row.validRows,
       invalid_rows: row.invalidRows,
       duplicate_rows: row.duplicateRows,
+      report_identifier: row.reportIdentifier || undefined,
+      period_start: row.periodStart || undefined,
+      period_end: row.periodEnd || undefined,
+      currency: row.currency || 'USD',
       created_at: row.createdAt,
       completed_at: row.completedAt,
     };
@@ -1364,19 +1697,26 @@ export class NeonAdapter implements DatabaseAdapter {
       valid_rows: row.validRows,
       invalid_rows: row.invalidRows,
       duplicate_rows: row.duplicateRows,
+      report_identifier: row.reportIdentifier || undefined,
+      period_start: row.periodStart || undefined,
+      period_end: row.periodEnd || undefined,
+      currency: row.currency || 'USD',
       created_at: row.createdAt,
       completed_at: row.completedAt,
     };
   }
 
-  async updateCsvImport(importId: string, data: { status?: string; duplicate_rows?: number; completed_at?: string }): Promise<void> {
+  async updateCsvImport(importId: string, data: { status?: string; valid_rows?: number; invalid_rows?: number; duplicate_rows?: number; completed_at?: string }): Promise<void> {
     await this.client.query(
       `UPDATE "CsvImport" SET
         "status" = COALESCE($2, "status"),
-        "duplicateRows" = COALESCE($3, "duplicateRows"),
-        "completedAt" = COALESCE($4::timestamptz, "completedAt")
+        "validRows" = COALESCE($3, "validRows"),
+        "invalidRows" = COALESCE($4, "invalidRows"),
+        "duplicateRows" = COALESCE($5, "duplicateRows"),
+        "completedAt" = COALESCE($6::timestamptz, "completedAt")
        WHERE id = $1`,
-      [importId, data.status || null, data.duplicate_rows ?? null, data.completed_at || null],
+      [importId, data.status || null, data.valid_rows ?? null, data.invalid_rows ?? null,
+        data.duplicate_rows ?? null, data.completed_at || null],
     );
   }
 
@@ -1421,6 +1761,8 @@ export class NeonAdapter implements DatabaseAdapter {
         id: row.id, uploaded_by: row.uploadedByName, source: row.source, filename: row.filename,
         file_hash: row.fileHash, status: row.status, total_rows: row.totalRows,
         valid_rows: row.validRows, invalid_rows: row.invalidRows, duplicate_rows: row.duplicateRows,
+        report_identifier: row.reportIdentifier || undefined, period_start: row.periodStart || undefined,
+        period_end: row.periodEnd || undefined, currency: row.currency || 'USD',
         created_at: row.createdAt, completed_at: row.completedAt,
       })),
       total: Number(count.rows[0]?.total || 0),

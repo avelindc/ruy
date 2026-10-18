@@ -41,14 +41,16 @@ export default function TransactionsPage() {
         if (transactionResult.error) throw transactionResult.error;
         if (walletResult.error) throw walletResult.error;
         if (walletResult.data) setWallet(walletResult.data);
-        setTransactions(transactionResult.data.map((withdrawal) => ({
-          id: withdrawal.id,
-          user_id: withdrawal.user_id,
-          type: 'withdrawal',
-          amount: withdrawal.amount,
-          description: `Withdrawal to ${withdrawal.channel} (${withdrawal.status})`,
-          reference_id: withdrawal.reference_no,
-          created_at: withdrawal.created_at,
+        setTransactions(transactionResult.data.map((entry: any) => ({
+          id: entry.id,
+          user_id: entry.user_id,
+          type: entry.entry_type === 'royalty_credit' ? 'deposit'
+            : entry.entry_type === 'adjustment_credit' ? 'adjustment'
+            : entry.entry_type === 'withdrawal_release' ? 'refund' : 'withdrawal',
+          amount: Number(entry.amount || 0),
+          description: entry.description || entry.entry_type.replaceAll('_', ' '),
+          reference_id: entry.reference_id,
+          created_at: entry.created_at,
         })));
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load wallet activity');
@@ -199,8 +201,8 @@ export default function TransactionsPage() {
                     <td className="py-3.5 px-3 text-gray-300 font-medium">{tx.description}</td>
                     <td className="py-3.5 px-3 text-gray-400 font-mono text-[11px]">{tx.reference_id || tx.id}</td>
                     <td className="py-3.5 px-3 text-gray-400 font-mono">{new Date(tx.created_at).toLocaleDateString('id-ID')}</td>
-                    <td className={`py-3.5 px-3 text-right font-extrabold ${tx.type === 'withdrawal' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                      -${tx.amount.toFixed(2)} USD
+                    <td className={`py-3.5 px-3 text-right font-extrabold ${tx.amount < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      {tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)} USD
                     </td>
                   </tr>
                 ))}

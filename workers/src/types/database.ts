@@ -65,10 +65,22 @@ export interface Release {
   title: string;
   release_type: 'single' | 'ep' | 'album';
   primary_artist_id: string;
+  genre?: string;
+  language?: string;
   upc?: string;
   label_name?: string;
   artwork_url?: string;
   release_date: string; // YYYY-MM-DD
+  rejection_reason?: string;
+  release_version?: string;
+  subgenre?: string;
+  original_release_date?: string;
+  featured_artists?: string[];
+  copyright_c?: string;
+  copyright_p?: string;
+  notes?: string;
+  self_released?: boolean;
+  distribution_rights_confirmed?: boolean;
   status: 'draft' | 'submitted' | 'in_review' | 'approved' | 'rejected' | 'delivered' | 'live' | 'takedown';
   created_at: string;
   updated_at: string;
@@ -85,6 +97,15 @@ export interface ReleaseInput {
   artwork_url?: string;
   cover_artwork_url?: string;
   release_date: string;
+  release_version?: string;
+  subgenre?: string;
+  original_release_date?: string;
+  featured_artists?: string[];
+  copyright_c?: string;
+  copyright_p?: string;
+  notes?: string;
+  self_released?: boolean;
+  distribution_rights_confirmed?: boolean;
   tracks?: TrackInput[];
 }
 
@@ -97,6 +118,17 @@ export interface Track {
   release_id: string;
   owner_id: string;
   title: string;
+  track_version?: string;
+  primary_artist?: string;
+  featured_artists?: string[];
+  composers?: string[];
+  songwriters?: string[];
+  producers?: string[];
+  arrangers?: string[];
+  track_number?: number;
+  disc_number?: number;
+  rights_ownership?: string;
+  distribution_rights_confirmed?: boolean;
   audio_url?: string;
   isrc?: string;
   duration?: number; // in seconds
@@ -108,7 +140,19 @@ export interface Track {
 }
 
 export interface TrackInput {
+  id?: string;
   title: string;
+  track_version?: string;
+  primary_artist?: string;
+  featured_artists?: string[];
+  composers?: string[];
+  songwriters?: string[];
+  producers?: string[];
+  arrangers?: string[];
+  track_number?: number;
+  disc_number?: number;
+  rights_ownership?: string;
+  distribution_rights_confirmed?: boolean;
   audio_url?: string;
   audioUrl?: string;
   isrc?: string;
@@ -136,6 +180,11 @@ export interface StreamingRecord {
   reporting_period: string; // YYYY-MM-DD
   streams: number;
   revenue?: number;
+  deductions?: number;
+  net_revenue?: number;
+  report_period_start?: string;
+  report_period_end?: string;
+  source_row_reference?: string;
   currency: string;
   source_row_hash?: string;
   track_title?: string;
@@ -171,6 +220,10 @@ export interface RoyaltyEntry {
   streams?: number;
   source_report_id?: string;
   amount: number;
+  gross_revenue?: number;
+  deductions?: number;
+  net_revenue?: number;
+  batch_id?: string;
   currency: string;
   reporting_period: string; // YYYY-MM-DD
   royalty_type: 'streaming' | 'sales' | 'other';
@@ -236,11 +289,15 @@ export interface CsvImport {
   source: string;
   filename: string;
   file_hash?: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'partial' | 'completed' | 'failed';
   total_rows: number;
   valid_rows: number;
   invalid_rows: number;
   duplicate_rows?: number;
+  report_identifier?: string;
+  period_start?: string;
+  period_end?: string;
+  currency?: string | null;
   created_at: string;
   completed_at?: string;
 }
@@ -253,6 +310,16 @@ export interface ReleaseStatusHistory {
   reason?: string;
   actor_id?: string;
   created_at: string;
+}
+
+export interface RoyaltyRuleInput {
+  artist_id: string;
+  platform: string;
+  share_percent: number;
+  revenue_basis: 'gross' | 'net';
+  currency: 'USD';
+  effective_from: string;
+  effective_until?: string | null;
 }
 
 // ============================================================================
@@ -363,6 +430,7 @@ export interface DatabaseAdapter {
     pendingWithdrawals: number;
   }>;
   hasStreamingDuplicate(sourceRowHash: string): Promise<boolean>;
+  hasStreamingIdentityDuplicate(sourceRowIdentity: string): Promise<boolean>;
 
   // ========== ARTIST OPERATIONS ==========
   getArtist(artistId: string): Promise<Artist | null>;
@@ -398,8 +466,13 @@ export interface DatabaseAdapter {
   // ========== ROYALTY OPERATIONS ==========
   getRoyalties(artistId: string, limit?: number, offset?: number): Promise<{ data: RoyaltyEntry[]; total: number }>;
   getRoyaltiesByPeriod(artistId: string, startDate: string, endDate: string): Promise<RoyaltyEntry[]>;
-  createRoyaltyEntry(data: RoyaltyEntry): Promise<RoyaltyEntry>;
   getRoyaltyTotal(artistId: string): Promise<number>;
+  getRoyaltyCalculationItemsForOwner(userId: string, limit?: number, offset?: number): Promise<{ data: any[]; total: number }>;
+  listRoyaltyRules(artistId?: string): Promise<any[]>;
+  createRoyaltyRule(data: RoyaltyRuleInput, adminId: string): Promise<any>;
+  processStreamingReportRoyalties(reportId: string, adminId: string): Promise<string>;
+  getFinancialLedger(userId?: string, limit?: number, offset?: number): Promise<{ data: any[]; total: number }>;
+  getFinancialLedgerSummary(userId: string): Promise<Array<{ currency: string; balance: number; total_earned: number; total_withdrawn: number }>>;
 
   // ========== ADMIN OPERATIONS ==========
   getAuditLogs(filters: AuditLogFilter): Promise<{ data: AuditLog[]; total: number }>;
@@ -418,10 +491,11 @@ export interface DatabaseAdapter {
 
   getReleasesByStatus(status: string, limit?: number, offset?: number): Promise<{ data: Release[]; total: number }>;
   updateReleaseStatus(releaseId: string, newStatus: string, reason?: string, actorId?: string): Promise<Release>;
+  getReleaseStatusHistory(releaseId: string): Promise<Array<{ previous_status?: string; new_status: string; reason?: string; actor_id?: string; actor_name?: string; created_at: string }>>;
 
   createCsvImport(data: Omit<CsvImport, 'id' | 'created_at'>): Promise<CsvImport>;
   getCsvImportStatus(importId: string): Promise<CsvImport | null>;
-  updateCsvImport(importId: string, data: Partial<Pick<CsvImport, 'status' | 'duplicate_rows' | 'completed_at'>>): Promise<void>;
+  updateCsvImport(importId: string, data: Partial<Pick<CsvImport, 'status' | 'valid_rows' | 'invalid_rows' | 'duplicate_rows' | 'completed_at'>>): Promise<void>;
   createCsvImportErrors(importId: string, errors: Array<{ row_number: number; error_code: string; error_message: string; raw_row?: string }>): Promise<void>;
   getCsvImportErrors(importId: string, limit: number, offset: number): Promise<Array<{ row_number: number; error_code: string; error_message: string; raw_row: string }>>;
   listCsvImports(filters: { source?: string; status?: string; start_date?: string; end_date?: string; limit: number; offset: number }): Promise<{ data: CsvImport[]; total: number }>;

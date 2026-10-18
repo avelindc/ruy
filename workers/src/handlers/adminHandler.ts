@@ -5,7 +5,7 @@
  * All endpoints require admin or super_admin role verification
  */
 
-import type { DatabaseAdapter, ApiResponse } from '../types/database';
+import type { DatabaseAdapter, ApiResponse, RoyaltyRuleInput } from '../types/database';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { handleError, getStatusCode } from '../middleware/errors';
 import { ValidationError, NotFoundError } from '../types/database';
@@ -17,6 +17,74 @@ function jsonResponse(data: any, status: number = 200, headers: Record<string, s
   });
 }
 
+const CSV_IMPORT_MAX_REQUEST_BYTES = 15 * 1024 * 1024;
+const CSV_IMPORT_MAX_ROWS_PER_REQUEST = 5000;
+
+async function readJsonBodyLimited<T>(request: Request, maxBytes: number): Promise<T> {
+  if (!request.body) throw new ValidationError('A JSON request body is required.');
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        throw new ValidationError('CSV import request exceeds the 15 MB processing limit. Split the report into smaller files.');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const payload = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    payload.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(payload));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new ValidationError('CSV import request must contain a JSON object.');
+    }
+    return parsed as T;
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
+    throw new ValidationError('CSV import request must contain valid JSON.');
+  }
+}
+
+function isIsoDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+async function streamingRowHash(row: Record<string, unknown>): Promise<string> {
+  const revenue = Number(row.revenue);
+  const canonical = [
+    String(row.isrc || '').trim().toUpperCase(), String(row.upc || '').trim(),
+    String(row.platform || '').trim().toLowerCase(), String(row.territory || '').trim().toUpperCase(),
+    String(row.reportingPeriod || '').trim(), String(Number(row.streams)),
+    Number.isFinite(revenue) ? revenue.toString() : '', String(row.currency || 'USD').trim().toUpperCase(),
+  ].join('|');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function streamingRowIdentity(row: Record<string, unknown>): Promise<string> {
+  const identity = [
+    String(row.isrc || '').trim().toUpperCase(), String(row.upc || '').trim(),
+    String(row.platform || '').trim().toLowerCase(), String(row.territory || '').trim().toUpperCase(),
+    String(row.reportingPeriod || '').trim(),
+  ].join('|');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+  return `row:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
 export async function handleAdminDashboardStats(
   request: Request,
   adapter: DatabaseAdapter,
@@ -24,7 +92,7 @@ export async function handleAdminDashboardStats(
   env: any,
 ): Promise<Response> {
   try {
-    const authContext = await requireAuth(request, env);
+    const authContext = await requireAuth(request, env, adapter);
     await requireAdmin(authContext, adapter);
     return jsonResponse({ success: true, data: await adapter.getAdminDashboardStats() }, 200, headers);
   } catch (error) {
@@ -48,7 +116,7 @@ export async function handleAuditLogs(
 
     // GET /api/admin/audit-logs
     if (request.method === 'GET' && pathname === '/api/admin/audit-logs') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200);
@@ -83,7 +151,7 @@ export async function handleAuditLogs(
 
     // POST /api/admin/audit-logs (create audit log entry)
     if (request.method === 'POST' && pathname === '/api/admin/audit-logs') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const body = (await request.json()) as {
@@ -139,7 +207,7 @@ export async function handleAdminWithdrawals(
 
     // GET /api/admin/withdrawals
     if (request.method === 'GET' && pathname === '/api/admin/withdrawals') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200);
@@ -167,7 +235,7 @@ export async function handleAdminWithdrawals(
     // PUT /api/admin/withdrawals/:id (approve/reject withdrawal)
     const withdrawalMatch = pathname.match(/^\/api\/admin\/withdrawals\/([^/]+)$/);
     if (request.method === 'PUT' && withdrawalMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const withdrawalId = decodeURIComponent(withdrawalMatch[1]);
@@ -185,6 +253,9 @@ export async function handleAdminWithdrawals(
       }
       if (body.status === 'paid' && !body.reference_no?.trim()) {
         throw new ValidationError('A transfer reference is required before marking a withdrawal paid');
+      }
+      if (body.status === 'rejected' && !body.rejection_reason?.trim()) {
+        throw new ValidationError('A rejection reason is required before rejecting a withdrawal.');
       }
 
       const withdrawal = await adapter.updateWithdrawalStatus(
@@ -220,7 +291,7 @@ export async function handleAdminUsers(
   env: any,
 ): Promise<Response> {
   try {
-    const authContext = await requireAuth(request, env);
+    const authContext = await requireAuth(request, env, adapter);
     await requireAdmin(authContext, adapter);
     const url = new URL(request.url);
     const pathname = url.pathname;
@@ -308,7 +379,7 @@ export async function handleReleaseReview(
 
     // GET /api/admin/releases-review
     if (request.method === 'GET' && pathname === '/api/admin/releases-review') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 200);
@@ -347,7 +418,7 @@ export async function handleReleaseReview(
     // PUT /api/admin/releases-review/:id (approve/reject release)
     const releaseMatch = pathname.match(/^\/api\/admin\/releases-review\/([^/]+)$/);
     if (request.method === 'PUT' && releaseMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const releaseId = decodeURIComponent(releaseMatch[1]);
@@ -361,27 +432,15 @@ export async function handleReleaseReview(
       }
 
       const raw = body.status.toLowerCase().trim();
-      let pgStatus = 'REVIEW';
-      if (raw === 'approved') pgStatus = 'APPROVED';
-      else if (raw === 'rejected') pgStatus = 'REJECTED';
-      else if (raw === 'pending' || raw === 'draft') pgStatus = 'PENDING';
+      if (!['approved', 'rejected'].includes(raw)) {
+        throw new ValidationError('status must be approved or rejected');
+      }
+      if (raw === 'rejected' && !body.reason?.trim()) {
+        throw new ValidationError('A rejection reason is required.');
+      }
+      const pgStatus = raw === 'approved' ? 'APPROVED' : 'REJECTED';
 
       const release = await adapter.updateReleaseStatus(releaseId, pgStatus, body.reason, authContext.userId);
-
-      try {
-        await adapter.createAuditLog({
-          actor_id: authContext.userId,
-          action: pgStatus === 'APPROVED' ? 'release.approve' : 'release.reject',
-          entity_type: 'release',
-          entity_id: releaseId,
-          metadata: {
-            reason: body.reason || null,
-            status: pgStatus,
-          },
-        });
-      } catch (logErr) {
-        // Continue even if audit log insert encounters table issues
-      }
 
       return jsonResponse(
         {
@@ -415,8 +474,19 @@ export async function handleCsvImport(
     const url = new URL(request.url);
     const pathname = url.pathname;
 
+    const royaltyProcessMatch = pathname.match(/^\/api\/admin\/csv-import\/([^/]+)\/royalties$/);
+    if (request.method === 'POST' && royaltyProcessMatch) {
+      const authContext = await requireAuth(request, env, adapter);
+      await requireAdmin(authContext, adapter);
+      const reportId = decodeURIComponent(royaltyProcessMatch[1]);
+      const report = await adapter.getCsvImportStatus(reportId);
+      if (!report) throw new NotFoundError('CSV report not found.');
+      const batchId = await adapter.processStreamingReportRoyalties(reportId, authContext.userId);
+      return jsonResponse({ success: true, data: { reportId, batchId, status: 'completed' } }, 200, headers);
+    }
+
     if (request.method === 'GET' && pathname === '/api/admin/csv-import') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 50), 1), 100);
       const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
@@ -433,7 +503,7 @@ export async function handleCsvImport(
 
     // POST /api/admin/csv-import (create CSV import job)
     if (request.method === 'POST' && pathname === '/api/admin/csv-import') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const body = (await request.json()) as {
@@ -442,11 +512,24 @@ export async function handleCsvImport(
         file_hash: string;
         valid_rows: number;
         invalid_rows: number;
+        report_identifier?: string;
+        period_start?: string;
+        period_end?: string;
+        currency?: string | null;
       };
 
-      if (!body.filename || !body.source || !body.file_hash) {
-        throw new ValidationError('filename, source, and file_hash are required');
+      if (!body.filename?.trim() || body.filename.length > 255 || !body.source?.trim() || body.source.length > 80
+        || !/^[a-f0-9]{64}$/i.test(body.file_hash || '')
+        || !Number.isSafeInteger(body.valid_rows) || body.valid_rows < 0
+        || !Number.isSafeInteger(body.invalid_rows) || body.invalid_rows < 0) {
+        throw new ValidationError('A safe filename, source, SHA-256 file hash, and non-negative row counts are required.');
       }
+      if ((body.period_start && !isIsoDate(body.period_start)) || (body.period_end && !isIsoDate(body.period_end))
+        || (body.period_start && body.period_end && body.period_start > body.period_end)) {
+        throw new ValidationError('Report period must be a valid ordered date range.');
+      }
+      const reportCurrency = body.currency == null ? null : body.currency.trim().toUpperCase();
+      if (reportCurrency && !/^[A-Z]{3}$/.test(reportCurrency)) throw new ValidationError('Report currency must be a 3-letter ISO code.');
 
       const csvImport = await adapter.createCsvImport({
         uploaded_by: authContext.userId,
@@ -457,6 +540,10 @@ export async function handleCsvImport(
         total_rows: body.valid_rows + body.invalid_rows,
         valid_rows: body.valid_rows,
         invalid_rows: body.invalid_rows,
+        report_identifier: body.report_identifier?.trim().slice(0, 200) || undefined,
+        period_start: body.period_start,
+        period_end: body.period_end,
+        currency: reportCurrency,
       });
 
       return jsonResponse(
@@ -472,7 +559,7 @@ export async function handleCsvImport(
     // GET /api/admin/csv-import/:id (get import status)
     const importMatch = pathname.match(/^\/api\/admin\/csv-import\/([^/]+)$/);
     if (request.method === 'GET' && importMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
 
       const importId = decodeURIComponent(importMatch[1]);
@@ -495,7 +582,7 @@ export async function handleCsvImport(
 
     const importSubresource = pathname.match(/^\/api\/admin\/csv-import\/([^/]+)\/(rows|errors)$/);
     if (importSubresource && request.method === 'GET') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
       const importId = decodeURIComponent(importSubresource[1]);
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 50), 1), 500);
@@ -512,22 +599,31 @@ export async function handleCsvImport(
     }
 
     if (importSubresource && request.method === 'POST' && importSubresource[2] === 'rows') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
+      const contentLength = Number(request.headers.get('content-length') || 0);
+      if (Number.isFinite(contentLength) && contentLength > CSV_IMPORT_MAX_REQUEST_BYTES) {
+        throw new ValidationError('CSV import request exceeds the 15 MB processing limit. Split the report into smaller files.');
+      }
       const importId = decodeURIComponent(importSubresource[1]);
       const importRecord = await adapter.getCsvImportStatus(importId);
       if (!importRecord) throw new NotFoundError('CSV import not found');
       if (importRecord.status !== 'processing') throw new ValidationError('CSV import is not in processing state');
 
-      const body = await request.json() as {
+      const body = await readJsonBodyLimited<{
         rows?: Array<Record<string, unknown>>;
         validationErrors?: Array<{ rowNumber: number; errorCode: string; errorMessage: string; rawRow?: string }>;
-      };
+      }>(request, CSV_IMPORT_MAX_REQUEST_BYTES);
       const rows = Array.isArray(body.rows) ? body.rows : [];
       const validationErrors = Array.isArray(body.validationErrors) ? body.validationErrors : [];
+      if (rows.length > CSV_IMPORT_MAX_ROWS_PER_REQUEST || validationErrors.length > CSV_IMPORT_MAX_ROWS_PER_REQUEST) {
+        throw new ValidationError('CSV import requests are limited to 5,000 rows and 5,000 validation errors.');
+      }
       const errors: Array<{ row_number: number; error_code: string; error_message: string; raw_row?: string }> = validationErrors.map((error) => ({
-        row_number: Number(error.rowNumber), error_code: String(error.errorCode),
-        error_message: String(error.errorMessage), raw_row: String(error.rawRow || ''),
+        row_number: Number.isSafeInteger(Number(error.rowNumber)) && Number(error.rowNumber) > 0 ? Number(error.rowNumber) : 1,
+        error_code: String(error.errorCode || 'VALIDATION_ERROR').slice(0, 80),
+        error_message: String(error.errorMessage || 'The source row did not pass validation.').slice(0, 500),
+        raw_row: String(error.rawRow || '').slice(0, 1000),
       }));
       let inserted = 0;
       let duplicates = 0;
@@ -535,48 +631,78 @@ export async function handleCsvImport(
       for (let index = 0; index < rows.length; index += 1) {
         const row = rows[index];
         const rowNumber = index + 1;
-        const sourceHash = typeof row.sourceRowHash === 'string' ? row.sourceRowHash : '';
-        if (!sourceHash || typeof row.platform !== 'string' || typeof row.territory !== 'string'
-          || !Number.isFinite(Number(row.streams)) || !Number.isFinite(Number(row.revenue))) {
-          errors.push({ row_number: rowNumber, error_code: 'INVALID_ROW', error_message: 'Required streaming row fields are missing.' });
+        const isrc = typeof row.isrc === 'string' ? row.isrc.trim().toUpperCase() : '';
+        const upc = typeof row.upc === 'string' ? row.upc.trim() : '';
+        const platform = typeof row.platform === 'string' ? row.platform.trim() : '';
+        const territory = typeof row.territory === 'string' ? row.territory.trim().toUpperCase() : '';
+        const reportingPeriod = typeof row.reportingPeriod === 'string' ? row.reportingPeriod.trim() : '';
+        const currency = typeof row.currency === 'string' ? row.currency.trim().toUpperCase() : 'USD';
+        const streams = Number(row.streams);
+        const revenue = Number(row.revenue ?? 0);
+        const deductions = row.deductions === undefined ? 0 : Number(row.deductions);
+        if (!/^[A-Z0-9]{12}$/.test(isrc) || (upc && !/^\d{12,20}$/.test(upc))
+          || !platform || platform.length > 80 || !/^[A-Z]{2}$/.test(territory)
+          || !isIsoDate(reportingPeriod) || !Number.isSafeInteger(streams) || streams < 0
+          || !Number.isFinite(revenue) || revenue < 0 || revenue > 9999999999.999999
+          || !Number.isFinite(deductions) || deductions < 0 || deductions > revenue
+          || !/^[A-Z]{3}$/.test(currency)) {
+          errors.push({ row_number: rowNumber, error_code: 'INVALID_ROW', error_message: 'Streaming row fields failed server validation.', raw_row: String(row.rawRow || '').slice(0, 1000) });
           continue;
         }
+
+        // Resolve ownership and release linkage on the server. Client-supplied IDs/matches are informational only.
+        const track = await adapter.getTrackByIsrc(isrc);
+        if (!track) {
+          errors.push({ row_number: rowNumber, error_code: 'UNMATCHED_TRACK', error_message: 'No registered track matches this ISRC.', raw_row: String(row.rawRow || '').slice(0, 1000) });
+          continue;
+        }
+        const release = await adapter.getRelease(track.release_id);
+        if (!release || release.owner_id !== track.owner_id || (upc && release.upc !== upc)
+          || (typeof row.trackId === 'string' && row.trackId !== track.id)
+          || (typeof row.releaseId === 'string' && row.releaseId !== release.id)) {
+          errors.push({ row_number: rowNumber, error_code: 'MATCH_MISMATCH', error_message: 'ISRC, UPC, track, and release do not match a single registered owner.', raw_row: String(row.rawRow || '').slice(0, 1000) });
+          continue;
+        }
+
+        const sourceHash = await streamingRowHash({ isrc, upc, platform, territory, reportingPeriod, streams, revenue, currency });
+        const sourceIdentity = await streamingRowIdentity({ isrc, upc, platform, territory, reportingPeriod });
         try {
-          if (await adapter.hasStreamingDuplicate(sourceHash)) {
+          if (await adapter.hasStreamingDuplicate(sourceHash) || await adapter.hasStreamingIdentityDuplicate(sourceIdentity)) {
             duplicates += 1;
-            errors.push({ row_number: rowNumber, error_code: 'DUPLICATE_ROW', error_message: 'This source row was imported previously.' });
+            errors.push({ row_number: rowNumber, error_code: 'DUPLICATE_OR_CORRECTION_REQUIRED', error_message: 'This track/platform/territory/date row already exists. Corrections require an explicit reviewed correction workflow.' });
             continue;
           }
           await adapter.createStreamingRecord({
             id: '', report_id: importId,
-            track_id: typeof row.trackId === 'string' ? row.trackId : undefined,
-            release_id: typeof row.releaseId === 'string' ? row.releaseId : undefined,
-            isrc: typeof row.isrc === 'string' ? row.isrc : undefined,
-            upc: typeof row.upc === 'string' ? row.upc : undefined,
-            platform: row.platform,
-            territory: row.territory,
-            reporting_period: String(row.reportingPeriod || ''),
-            streams: Number(row.streams),
-            revenue: Number(row.revenue),
-            currency: typeof row.currency === 'string' ? row.currency : 'USD',
-            source_row_hash: sourceHash,
+            track_id: track.id, release_id: release.id, isrc, upc: upc || undefined,
+            platform, territory, reporting_period: reportingPeriod, streams, revenue,
+            deductions, net_revenue: revenue - deductions,
+            currency, source_row_hash: sourceHash,
+            report_period_start: importRecord.period_start,
+            report_period_end: importRecord.period_end,
+            source_row_reference: sourceIdentity,
             created_at: new Date().toISOString(),
           });
           inserted += 1;
-        } catch {
+        } catch (error) {
+          if (error instanceof Error && error.message === 'DUPLICATE_SOURCE_ROW') {
+            duplicates += 1;
+            errors.push({ row_number: rowNumber, error_code: 'DUPLICATE_ROW', error_message: 'This source row was imported previously.' });
+            continue;
+          }
           errors.push({ row_number: rowNumber, error_code: 'INSERT_ERROR', error_message: 'The streaming row could not be saved.' });
         }
       }
 
       if (errors.length) await adapter.createCsvImportErrors(importId, errors);
       await adapter.updateCsvImport(importId, {
-        status: 'completed', duplicate_rows: duplicates, completed_at: new Date().toISOString(),
+        status: errors.length ? 'partial' : 'completed', valid_rows: inserted, invalid_rows: errors.length, duplicate_rows: duplicates, completed_at: new Date().toISOString(),
       });
       await adapter.createAuditLog({ actor_id: authContext.userId, action: 'CSV_IMPORT_EXECUTED', entity_type: 'CsvImport', entity_id: importId,
         metadata: { insertedRows: inserted, duplicateRows: duplicates, errorRows: errors.length } });
       return jsonResponse({ success: true, data: {
         importId, status: errors.length ? 'partial' : 'completed', totalRows: rows.length + validationErrors.length,
-        validRows: rows.length, invalidRows: validationErrors.length, duplicateRows: duplicates,
+        validRows: inserted, invalidRows: errors.length, duplicateRows: duplicates,
         insertedRecords: inserted,
         errors: errors.map((error) => ({ rowNumber: error.row_number, errorCode: error.error_code, errorMessage: error.error_message })),
       } }, 200, headers);
@@ -587,5 +713,71 @@ export async function handleCsvImport(
     const errorResponse = handleError(error);
     const statusCode = getStatusCode(error);
     return jsonResponse(errorResponse, statusCode, headers);
+  }
+}
+
+/** Versioned, admin-configured royalty shares; no default rate is applied. */
+export async function handleAdminRoyaltyRules(
+  request: Request,
+  adapter: DatabaseAdapter,
+  headers: Record<string, string>,
+  env: any,
+): Promise<Response> {
+  try {
+    const authContext = await requireAuth(request, env, adapter);
+    await requireAdmin(authContext, adapter);
+    const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/api/admin/royalty-rules') {
+      const artistId = url.searchParams.get('artist_id') || undefined;
+      const rules = await adapter.listRoyaltyRules(artistId);
+      return jsonResponse({ success: true, data: rules }, 200, headers);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/royalty-rules') {
+      const body = await request.json() as Partial<RoyaltyRuleInput>;
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!body.artist_id || !uuid.test(body.artist_id) || !body.platform?.trim() || body.platform.length > 80
+        || typeof body.share_percent !== 'number' || !Number.isFinite(body.share_percent)
+        || body.share_percent <= 0 || body.share_percent > 100
+        || (body.revenue_basis !== 'gross' && body.revenue_basis !== 'net')
+        || body.currency !== 'USD' || !isIsoDate(body.effective_from)
+        || (body.effective_until != null && !isIsoDate(body.effective_until))) {
+        throw new ValidationError('Supply an artist, platform, 0–100% share, gross/net basis, USD currency, and valid effective dates.');
+      }
+      if (body.effective_until && body.effective_until < body.effective_from!) {
+        throw new ValidationError('The rule end date cannot precede its start date.');
+      }
+      const rule = await adapter.createRoyaltyRule(body as RoyaltyRuleInput, authContext.userId);
+      return jsonResponse({ success: true, data: rule }, 201, headers);
+    }
+    return jsonResponse({ success: false, error: 'Method not allowed' }, 405, headers);
+  } catch (error) {
+    const errorResponse = handleError(error);
+    return jsonResponse(errorResponse, getStatusCode(error), headers);
+  }
+}
+
+export async function handleFinancialLedger(
+  request: Request,
+  adapter: DatabaseAdapter,
+  headers: Record<string, string>,
+  env: any,
+  adminOnly = false,
+): Promise<Response> {
+  try {
+    if (request.method !== 'GET') return jsonResponse({ success: false, error: 'Method not allowed' }, 405, headers);
+    const authContext = await requireAuth(request, env, adapter);
+    if (adminOnly) await requireAdmin(authContext, adapter);
+    const url = new URL(request.url);
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 100), 1), 500);
+    const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+    const ownerId = adminOnly ? url.searchParams.get('user_id') || undefined : authContext.userId;
+    const [result, summary] = await Promise.all([
+      adapter.getFinancialLedger(ownerId, limit, offset),
+      ownerId ? adapter.getFinancialLedgerSummary(ownerId) : Promise.resolve(undefined),
+    ]);
+    return jsonResponse({ success: true, data: { ...result, ...(summary ? { summary } : {}) } }, 200, headers);
+  } catch (error) {
+    const errorResponse = handleError(error);
+    return jsonResponse(errorResponse, getStatusCode(error), headers);
   }
 }

@@ -25,6 +25,11 @@ export default function CSVImportPage() {
     setError('');
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      setFile(null);
+      setError('Ukuran CSV maksimal 10 MB per import.');
+      return;
+    }
 
     try {
       setLoading(true);
@@ -79,6 +84,10 @@ export default function CSVImportPage() {
       }
 
       const result = await validateCSVRows(csvText, mappings);
+      if (result.totalRows > 5000) {
+        setError('CSV dibatasi 5.000 baris per import agar validasi dan pencocokan tetap aman.');
+        return;
+      }
       setParseResult(result);
 
       if (result.errors.length > 0) {
@@ -106,7 +115,7 @@ export default function CSVImportPage() {
       setLoading(true);
       setStep('executing');
 
-      if (!file || !user || matchedRows.length === 0) {
+      if (!file || !user || (!matchedRows.length && !(parseResult?.errors.length))) {
         setError('Missing required data for import');
         return;
       }
@@ -214,7 +223,7 @@ export default function CSVImportPage() {
                 <path d="M28 8H12a4 4 0 00-4 4v24a4 4 0 004 4h24a4 4 0 004-4V20m-12-12v12m0 0l4-4m-4 4l-4-4" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
               </svg>
               <p className="text-gray-700 font-medium">Drop your CSV file here or click to select</p>
-              <p className="text-gray-500 text-sm mt-2">Max 50MB, max 100,000 rows</p>
+              <p className="text-gray-500 text-sm mt-2">Maksimal 10 MB dan 5.000 baris per import</p>
             </label>
           </div>
 

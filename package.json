@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
     "test:auth": "npm --prefix workers run test:auth",
+    "test": "npm --prefix workers run test:all",
     "preview": "vite preview"
   },
   "dependencies": {

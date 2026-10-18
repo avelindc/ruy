@@ -11,6 +11,7 @@ import { createAdapter } from '../dist/adapters/factory.js';
 import { NeonAdapter } from '../dist/adapters/neonAdapter.js';
 import { AuthorizationError } from '../dist/types/database.js';
 import { requireAdmin, requireAuth } from '../dist/middleware/auth.js';
+import { handleReleases } from '../dist/index.js';
 
 const testSecret = 'local-auth-test-secret-never-used-in-production';
 const baseUser = {
@@ -234,6 +235,34 @@ test('artist ID migration backfills only missing IDs and enforces format, unique
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS users_artist_id_unique_idx/i);
   assert.match(migration, /BEFORE UPDATE OF artist_id ON public\.users/i);
   assert.match(migration, /artist_id is immutable/i);
+});
+
+test('artist cannot set approved/live status through the release edit endpoint', async () => {
+  const user = { ...baseUser, role: 'user' };
+  const adapter = createMemoryAdapter([user]);
+  const jti = randomUUID();
+  await adapter.createAuthSession(user.id, jti, new Date(Date.now() + 3600_000));
+  adapter.getRelease = async () => ({ id: 'release-1', owner_id: user.id, status: 'draft' });
+  let updateCalled = false;
+  adapter.updateRelease = async () => { updateCalled = true; throw new Error('must not update'); };
+  const token = createTestJwt(testSecret, {
+    sub: user.id, email: user.email, user_role: 'user', jti,
+    iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600,
+    aud: 'breakout-music', iss: 'breakout-music-api',
+  });
+  const response = await handleReleases(
+    authRequest('/api/releases/release-1', 'PUT', token, { status: 'approved' }),
+    { JWT_SECRET: testSecret }, adapter, {},
+  );
+  assert.equal(response.status, 403);
+  assert.equal(updateCalled, false);
+});
+
+test('legacy Artist ID migration adds permanent unique IDs without replacing existing values', async () => {
+  const migration = await readFile(new URL('../migrations/0002_user_artist_id.sql', import.meta.url), 'utf8');
+  assert.match(migration, /UPDATE public\.users[\s\S]*?WHERE artist_id IS NULL OR btrim\(artist_id\) = ''/i);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS users_artist_id_unique_idx/i);
+  assert.match(migration, /BEFORE UPDATE OF artist_id/i);
 });
 
 test('login refuses to issue a token when JWT_SECRET is absent', async () => {

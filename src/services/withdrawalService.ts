@@ -1,5 +1,4 @@
 import { apiGet, apiPost, apiPut } from '@lib/api/client';
-import { getRoyaltyEntries } from './royaltiesService';
 
 export interface WithdrawalRecord {
   id: string;
@@ -57,7 +56,7 @@ export async function getAdminWithdrawalRequests(status?: string) {
   }
 }
 
-export async function updateAdminWithdrawal(id: string, status: 'paid' | 'rejected', reason?: string) {
+export async function updateAdminWithdrawal(id: string, status: 'approved' | 'paid' | 'rejected', reason?: string) {
   try {
     const response = await apiPut<any>(`/api/admin/withdrawals/${encodeURIComponent(id)}`, {
       status,
@@ -73,17 +72,14 @@ export async function updateAdminWithdrawal(id: string, status: 'paid' | 'reject
 
 export async function getWalletInfo(userId: string) {
   try {
-    const [royalties, withdrawals] = await Promise.all([getRoyaltyEntries(userId), getWithdrawalRequests(userId)]);
-    if (royalties.error) throw royalties.error;
-    if (withdrawals.error) throw withdrawals.error;
-    const totalEarned = (royalties.data || []).reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0);
-    const totalWithdrawn = withdrawals.data
-      .filter((row) => row.status === 'paid')
-      .reduce((sum, row) => sum + row.amount, 0);
-    const reserved = withdrawals.data
-      .filter((row) => ['pending', 'under_review', 'approved', 'processing', 'paid'].includes(row.status))
-      .reduce((sum, row) => sum + row.amount, 0);
-    return { data: { balance: Math.max(0, totalEarned - reserved), total_earned: totalEarned, total_withdrawn: totalWithdrawn }, error: null };
+    const ledgerResult = await getWalletTransactions(userId, 500);
+    if (ledgerResult.error) throw ledgerResult.error;
+    const usdSummary = ledgerResult.summary?.find((item: any) => item.currency === 'USD');
+    return { data: {
+      balance: Number(usdSummary?.balance || 0),
+      total_earned: Number(usdSummary?.total_earned || 0),
+      total_withdrawn: Number(usdSummary?.total_withdrawn || 0),
+    }, error: null };
   } catch (error) {
     return { data: null, error: error instanceof Error ? error : new Error('Failed to fetch wallet info') };
   }
@@ -113,6 +109,11 @@ export async function cancelWithdrawalRequest(_withdrawalId: string) {
 }
 
 export async function getWalletTransactions(userId: string, limit = 50) {
-  const result = await getWithdrawalRequests(userId);
-  return { data: result.data.slice(0, limit), error: result.error };
+  void userId;
+  try {
+    const response = await apiGet<any>(`/api/financial-ledger?limit=${Math.min(Math.max(limit, 1), 500)}`);
+    return { data: response.data?.data || [], summary: response.data?.summary || [], error: null };
+  } catch (error) {
+    return { data: [], summary: [], error: error instanceof Error ? error : new Error('Failed to fetch wallet ledger') };
+  }
 }

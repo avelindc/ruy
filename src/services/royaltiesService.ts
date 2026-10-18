@@ -27,6 +27,18 @@ export async function getRoyaltyEntries(_userId: string) {
   }
 }
 
+/** Final royalty calculation rows, scoped by the authenticated account in the Worker. */
+export async function getRoyaltyCalculationItems(_userId: string) {
+  try {
+    const result = await apiGet<any>('/api/royalties/calculation-items?limit=500');
+    if (!result.success) throw new Error(result.error || 'Failed to fetch royalty calculation items');
+    return { data: result.data?.data || [], error: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch royalty calculation items';
+    return { data: [], error: new Error(message) };
+  }
+}
+
 /**
  * Get royalty summary
  */

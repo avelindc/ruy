@@ -12,7 +12,7 @@ import {
   Pie,
   Cell
 } from 'recharts';
-import { getRoyaltyEntries } from '@services/royaltiesService';
+import { getRoyaltyEntries, getRoyaltyCalculationItems } from '@services/royaltiesService';
 import { getWithdrawalRequests, type WithdrawalRecord } from '@services/withdrawalService';
 import { useAuth } from '@contexts/AuthContext';
 
@@ -60,6 +60,12 @@ const MONTH_SHORT: Record<string, string> = {
   '12': 'Des',
 };
 
+function royaltyStatusLabel(status: DisplayRoyaltyRow['status']): string {
+  if (status === 'paid') return 'Diterima';
+  if (status === 'finalized') return 'Tersedia';
+  return 'Diproses';
+}
+
 export interface DisplayRoyaltyRow {
   id: string;
   track_title: string;
@@ -73,7 +79,7 @@ export interface DisplayRoyaltyRow {
   royalty_usd: number;
   period: string; // e.g. "Aug 2026" or "2026-08"
   period_raw: string;
-  status: 'paid' | 'processing';
+  status: 'paid' | 'processing' | 'finalized';
   cover_url: string;
 }
 
@@ -118,14 +124,39 @@ export default function RoyaltiesPage() {
         setWithdrawals([]);
         return;
       }
-      const [royaltyResult, withdrawalResult] = await Promise.all([
+      const [royaltyResult, calculationResult, withdrawalResult] = await Promise.all([
         getRoyaltyEntries(user.id),
+        getRoyaltyCalculationItems(user.id),
         getWithdrawalRequests(user.id),
       ]);
       if (royaltyResult.error) throw royaltyResult.error;
+      if (calculationResult.error) throw calculationResult.error;
       if (withdrawalResult.error) throw withdrawalResult.error;
       setWithdrawals(withdrawalResult.data);
-      setRecords((royaltyResult.data || []).map((entry: any) => {
+      const calculationRows = (calculationResult.data || []).map((entry: any) => {
+        const periodRaw = String(entry.period_start || '').slice(0, 7);
+        const [year, month] = periodRaw.split('-');
+        const periodDisplay = month && MONTH_SHORT[month] ? `${MONTH_SHORT[month]} ${year}` : periodRaw;
+        const title = entry.track_title || '';
+        const platform = String(entry.platform || '').replace(/_/g, ' ').replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+        return {
+          id: entry.id,
+          track_title: title,
+          release_type: '',
+          artist_name: entry.artist_name || '',
+          release_title: entry.release_title || '',
+          isrc: entry.isrc || '',
+          platform,
+          platforms_list: [platform],
+          streams: Number(entry.streams || 0),
+          royalty_usd: entry.currency === 'USD' ? Number(entry.amount || 0) : 0,
+          period: periodDisplay,
+          period_raw: periodRaw,
+          status: 'finalized' as const,
+          cover_url: '',
+        };
+      });
+      const legacyRows = (royaltyResult.data || []).map((entry: any) => {
         const periodRaw = String(entry.reporting_period || '');
         const [year, month] = periodRaw.split('-');
         const periodDisplay = month && MONTH_SHORT[month] ? `${MONTH_SHORT[month]} ${year}` : periodRaw;
@@ -143,10 +174,11 @@ export default function RoyaltiesPage() {
           royalty_usd: Number(entry.amount || 0),
           period: periodDisplay,
           period_raw: periodRaw,
-          status: entry.status === 'paid' ? 'paid' : 'processing',
+          status: entry.status === 'paid' ? 'paid' : entry.status === 'finalized' ? 'finalized' : 'processing',
           cover_url: '',
         };
-      }));
+      });
+      setRecords(calculationRows.length ? calculationRows : legacyRows);
     } catch (err) {
       console.error('Error loading royalty reports:', err);
       setErrorMessage('Gagal memuat laporan royalti. Silakan periksa koneksi atau coba lagi nanti.');
@@ -337,7 +369,7 @@ export default function RoyaltiesPage() {
         item.platform.toLowerCase() === tablePlatformFilter.toLowerCase();
 
       // Table Status match
-      const itemStatusLabel = item.status === 'paid' ? 'Diterima' : 'Diproses';
+      const itemStatusLabel = royaltyStatusLabel(item.status);
       const matchesStatus =
         tableStatusFilter === 'Semua Status' ||
         itemStatusLabel === tableStatusFilter;
@@ -403,7 +435,7 @@ export default function RoyaltiesPage() {
       r.streams || 0,
       Number(r.royalty_usd || 0).toFixed(2),
       `"${r.period || ''}"`,
-      `"${r.status === 'paid' ? 'Diterima' : 'Diproses'}"`,
+      `"${royaltyStatusLabel(r.status)}"`,
     ]);
 
     const csvContent = [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
@@ -906,6 +938,7 @@ export default function RoyaltiesPage() {
             >
               <option value="Semua Status">Semua Status</option>
               <option value="Diterima">Diterima</option>
+              <option value="Tersedia">Tersedia</option>
               <option value="Diproses">Diproses</option>
             </select>
           </div>
@@ -1052,6 +1085,10 @@ export default function RoyaltiesPage() {
                         {isPaid ? (
                           <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                             Diterima
+                          </span>
+                        ) : row.status === 'finalized' ? (
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                            Tersedia
                           </span>
                         ) : (
                           <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/30">

@@ -24,12 +24,90 @@ function jsonResponse(data: any, status: number = 200, headers: Record<string, s
 }
 
 export interface StorageEnv {
+  JWT_SECRET?: string;
   STORAGE_BUCKET?: R2Bucket;
   R2_BUCKET?: R2Bucket;
   [key: string]: any;
 }
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB chunks for database storage
+const SIGNED_MEDIA_TTL_SECONDS = 5 * 60;
+const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function getStorageOwnerId(fileKey: string): string | null {
+  const parts = fileKey.replace(/^\/+/, '').split('/');
+  if (!['audio', 'covers'].includes(parts[0] || '')) return null;
+  if (USER_ID_PATTERN.test(parts[1] || '')) return parts[1];
+  const legacy = (parts[1] || '').match(/^([0-9a-f-]{36})-\d+-/i);
+  return legacy && USER_ID_PATTERN.test(legacy[1]) ? legacy[1] : null;
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
+  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+}
+
+async function storageSignature(secret: string, fileKey: string, expires: number): Promise<string> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(`${fileKey}\n${expires}`));
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
+async function isValidStorageSignature(request: Request, env: StorageEnv, fileKey: string): Promise<boolean> {
+  const secret = env.JWT_SECRET?.trim();
+  const url = new URL(request.url);
+  const expires = Number(url.searchParams.get('expires'));
+  const signature = url.searchParams.get('signature') || '';
+  const now = Math.floor(Date.now() / 1000);
+  if (!secret || !Number.isSafeInteger(expires) || expires < now || expires > now + SIGNED_MEDIA_TTL_SECONDS + 30 || !signature) return false;
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
+  );
+  try {
+    return await crypto.subtle.verify(
+      'HMAC', cryptoKey, base64UrlDecode(signature), new TextEncoder().encode(`${fileKey}\n${expires}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Issue short-lived access for an authenticated owner or admin to a private audio master. */
+export async function handleStorageSign(
+  request: Request,
+  env: StorageEnv,
+  adapter: DatabaseAdapter,
+  headers: Record<string, string>,
+): Promise<Response> {
+  try {
+    const authContext = await requireAuth(request, env, adapter);
+    const body = await request.json() as { fileKey?: string };
+    const fileKey = String(body.fileKey || '').replace(/^\/+/, '');
+    if (!fileKey.startsWith('audio/') || fileKey.includes('..')) throw new ValidationError('A valid private audio file key is required.');
+    const ownerId = getStorageOwnerId(fileKey);
+    if (!ownerId) throw new NotFoundError('Audio file not found.');
+    await requireOwnership(authContext, ownerId, adapter);
+    if (!(await checkStorageObjectExists(env, adapter, fileKey))) throw new NotFoundError('Audio file not found.');
+    const secret = env.JWT_SECRET?.trim();
+    if (!secret) throw new Error('Private media signing is not configured.');
+    const expires = Math.floor(Date.now() / 1000) + SIGNED_MEDIA_TTL_SECONDS;
+    const signature = await storageSignature(secret, fileKey, expires);
+    const url = new URL(`/api/storage/${encodeURIComponent(fileKey)}`, request.url);
+    url.searchParams.set('expires', String(expires));
+    url.searchParams.set('signature', signature);
+    return jsonResponse({ success: true, data: { url: url.toString(), expires_at: new Date(expires * 1000).toISOString() } }, 200, headers);
+  } catch (error) {
+    return jsonResponse(handleError(error), getStatusCode(error), headers);
+  }
+}
 
 /**
  * Upload audio or image file
@@ -41,7 +119,12 @@ export async function handleUpload(
   adapter: DatabaseAdapter,
   headers: Record<string, string>
 ): Promise<Response> {
-  const authContext = await requireAuth(request, env);
+  const authContext = await requireAuth(request, env, adapter);
+
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (Number.isFinite(contentLength) && contentLength > 160 * 1024 * 1024) {
+    throw new ValidationError('Upload request exceeds the maximum supported size.');
+  }
 
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('multipart/form-data')) {
@@ -67,7 +150,8 @@ export async function handleUpload(
 
   if (isImage) {
     const validImageMimes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!validImageMimes.includes(fileMime) && !fileName.match(/\.(jpe?g|png|webp)$/i)) {
+    const validImageExtension = /\.(jpe?g|png|webp)$/i.test(fileName);
+    if (!validImageExtension || (fileMime !== 'application/octet-stream' && !validImageMimes.includes(fileMime))) {
       throw new ValidationError('Artwork must be a valid image (JPEG, PNG, or WebP)');
     }
     if (fileSize > 15 * 1024 * 1024) {
@@ -95,7 +179,7 @@ export async function handleUpload(
     const hasValidAudioExt = !!fileName.match(/\.(mp3|wav|m4a|aac|flac|ogg)$/i);
     const hasValidAudioMime = validAudioMimes.includes(fileMime) || fileMime.startsWith('audio/');
 
-    if (!hasValidAudioExt && !hasValidAudioMime) {
+    if (!hasValidAudioExt || (!hasValidAudioMime && fileMime !== 'application/octet-stream')) {
       throw new ValidationError('File audio master harus berupa format yang valid (MP3, WAV, M4A, AAC, atau FLAC)');
     }
     if (fileSize > 150 * 1024 * 1024) {
@@ -108,10 +192,23 @@ export async function handleUpload(
   // Generate clean storage key
   const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
   const prefix = isImage ? 'covers/' : 'audio/';
-  const fileKey = `${prefix}${authContext.userId}-${Date.now()}-${safeName}`;
+  const fileKey = `${prefix}${authContext.userId}/${crypto.randomUUID()}-${safeName}`;
 
-  const arrayBuffer = await fileBlob.arrayBuffer();
-  const buffer = new Uint8Array(arrayBuffer);
+  const signatureBytes = new Uint8Array(await fileBlob.slice(0, 12).arrayBuffer());
+  const startsWith = (...bytes: number[]) => bytes.every((byte, index) => signatureBytes[index] === byte);
+  const asciiAt = (offset: number, value: string) => value.split('').every((char, index) => signatureBytes[offset + index] === char.charCodeAt(0));
+  const imageSignatureValid = uploadType === 'artwork' || uploadType === 'cover'
+    ? (startsWith(0xff, 0xd8, 0xff) || startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+      || (asciiAt(0, 'RIFF') && asciiAt(8, 'WEBP')))
+    : true;
+  const audioSignatureValid = isAudio
+    ? (asciiAt(0, 'ID3') || startsWith(0xff, 0xfb) || startsWith(0xff, 0xf3) || startsWith(0xff, 0xf2)
+      || (asciiAt(0, 'RIFF') && asciiAt(8, 'WAVE')) || asciiAt(0, 'fLaC') || asciiAt(0, 'OggS')
+      || (asciiAt(4, 'ftyp')) || startsWith(0xff, 0xf1) || startsWith(0xff, 0xf9))
+    : true;
+  if (!imageSignatureValid || !audioSignatureValid) {
+    throw new ValidationError('File content does not match a supported image or audio format.');
+  }
 
   // Attempt Storage 1: Cloudflare R2 (if bucket binding available)
   const r2Bucket = env.STORAGE_BUCKET || env.R2_BUCKET;
@@ -119,7 +216,7 @@ export async function handleUpload(
 
   if (r2Bucket) {
     try {
-      await r2Bucket.put(fileKey, buffer, {
+      await r2Bucket.put(fileKey, fileBlob.stream(), {
         httpMetadata: {
           contentType: fileMime,
         },
@@ -137,8 +234,16 @@ export async function handleUpload(
 
   // Attempt Storage 2: Database chunk storage fallback (Neon DB temp_upload_chunks)
   if (!storedInR2) {
+    if (fileSize > 8 * 1024 * 1024) {
+      return jsonResponse(
+        { success: false, error: 'R2 belum tersedia; penyimpanan fallback database dibatasi 8MB per file. Hubungi admin untuk konfigurasi storage.' },
+        503,
+        headers,
+      );
+    }
     if (adapter.saveUploadChunks) {
       try {
+        const buffer = new Uint8Array(await fileBlob.arrayBuffer());
         // Convert to base64 string
         let binaryStr = '';
         const bytes = new Uint8Array(buffer);
@@ -221,6 +326,17 @@ export async function handleStorageGet(
   fileKey: string
 ): Promise<Response> {
   const decodedKey = decodeURIComponent(fileKey).split('?')[0].split('#')[0];
+  const privateAudio = decodedKey.startsWith('audio/');
+  if (privateAudio && !(await isValidStorageSignature(request, env, decodedKey))) {
+    try {
+      const authContext = await requireAuth(request, env, adapter);
+      const ownerId = getStorageOwnerId(decodedKey);
+      if (!ownerId) throw new NotFoundError('Audio file not found.');
+      await requireOwnership(authContext, ownerId, adapter);
+    } catch (error) {
+      return jsonResponse(handleError(error), getStatusCode(error), headers);
+    }
+  }
   const rangeHeader = request.headers.get('range');
 
   // Determine MIME type by file extension
@@ -245,7 +361,7 @@ export async function handleStorageGet(
         const objHeaders = new Headers(headers);
         objHeaders.set('Content-Type', obj.httpMetadata?.contentType || mimeType);
         objHeaders.set('Accept-Ranges', 'bytes');
-        objHeaders.set('Cache-Control', 'public, max-age=31536000, immutable');
+        objHeaders.set('Cache-Control', privateAudio ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
         if (obj.httpEtag) objHeaders.set('ETag', obj.httpEtag);
 
         if (rangeHeader && 'range' in obj && obj.range) {
@@ -304,7 +420,7 @@ export async function handleStorageGet(
           resHeaders.set('Content-Length', String(slicedBytes.byteLength));
           resHeaders.set('Content-Range', `bytes ${start}-${end}/${totalSize}`);
           resHeaders.set('Accept-Ranges', 'bytes');
-          resHeaders.set('Cache-Control', 'public, max-age=31536000, immutable');
+          resHeaders.set('Cache-Control', privateAudio ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
 
           return new Response(slicedBytes, { status: 206, headers: resHeaders });
         }
@@ -314,7 +430,7 @@ export async function handleStorageGet(
         resHeaders.set('Content-Type', mimeType);
         resHeaders.set('Content-Length', String(totalSize));
         resHeaders.set('Accept-Ranges', 'bytes');
-        resHeaders.set('Cache-Control', 'public, max-age=31536000, immutable');
+        resHeaders.set('Cache-Control', privateAudio ? 'private, max-age=60' : 'public, max-age=31536000, immutable');
 
         return new Response(bytes, { status: 200, headers: resHeaders });
       }
@@ -350,16 +466,6 @@ async function checkStorageObjectExists(env: StorageEnv, adapter: DatabaseAdapte
     } catch {}
   }
 
-  // If external URL
-  if (urlOrKey.startsWith('http://') || urlOrKey.startsWith('https://')) {
-    try {
-      const res = await fetch(urlOrKey, { method: 'HEAD' });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
   return false;
 }
 
@@ -380,7 +486,7 @@ export async function handleReleaseSubmit(
   releaseId: string
 ): Promise<Response> {
   try {
-    const authContext = await requireAuth(request, env);
+    const authContext = await requireAuth(request, env, adapter);
 
     const release = await adapter.getRelease(releaseId);
     if (!release) {
@@ -388,6 +494,13 @@ export async function handleReleaseSubmit(
     }
 
     await requireOwnership(authContext, release.owner_id, adapter);
+
+    if (release.status !== 'draft' && release.status !== 'rejected') {
+      throw new ValidationError('Only draft or rejected releases can be submitted for review.');
+    }
+    if (release.distribution_rights_confirmed !== true) {
+      throw new ValidationError('Confirm distribution rights and ownership before submitting this release.');
+    }
 
     // 1. Verify Cover Artwork
     const artworkUrl = release.artwork_url || '';
@@ -400,6 +513,12 @@ export async function handleReleaseSubmit(
         400,
         headers
       );
+    }
+    const artworkKey = artworkUrl.includes('/api/storage/')
+      ? decodeURIComponent(artworkUrl.split('/api/storage/')[1].split(/[?#]/)[0])
+      : artworkUrl.replace(/^\/+/, '');
+    if (getStorageOwnerId(artworkKey) !== release.owner_id) {
+      throw new ValidationError('Cover artwork must be stored under the release owner account.');
     }
 
     const artworkVerified = await checkStorageObjectExists(env, adapter, artworkUrl);
@@ -430,6 +549,12 @@ export async function handleReleaseSubmit(
     }
 
     for (const track of tracks) {
+      if (track.owner_id !== release.owner_id) {
+        throw new ValidationError(`Track "${track.title}" is not owned by the release artist.`);
+      }
+      if (track.distribution_rights_confirmed !== true) {
+        return jsonResponse({ success: false, error: `Track "${track.title}" is missing distribution-rights confirmation.` }, 400, headers);
+      }
       if (!track.audio_url || !track.audio_url.trim()) {
         return jsonResponse(
           {
@@ -439,6 +564,12 @@ export async function handleReleaseSubmit(
           400,
           headers
         );
+      }
+      const audioKey = track.audio_url.includes('/api/storage/')
+        ? decodeURIComponent(track.audio_url.split('/api/storage/')[1].split(/[?#]/)[0])
+        : track.audio_url.replace(/^\/+/, '');
+      if (getStorageOwnerId(audioKey) !== release.owner_id) {
+        throw new ValidationError(`Track "${track.title}" audio must be stored under the release owner account.`);
       }
       const audioVerified = await checkStorageObjectExists(env, adapter, track.audio_url);
       if (!audioVerified) {

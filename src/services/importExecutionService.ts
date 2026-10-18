@@ -21,9 +21,13 @@ export async function executeImport(
   validRows: RowWithMatch[],
   validationErrors: ValidationError[],
 ): Promise<ImportExecutionResult> {
+  const periods = validRows.map((row) => row.reportingPeriod).sort();
   const created = await apiPost<any>('/api/admin/csv-import', {
     filename, file_hash: fileHash, source,
     valid_rows: validRows.length, invalid_rows: validationErrors.length,
+    period_start: periods[0],
+    period_end: periods[periods.length - 1],
+    currency: new Set(validRows.map((row) => row.currency)).size === 1 ? validRows[0]?.currency : null,
   });
   const importId = created.data?.id;
   if (!created.success || typeof importId !== 'string') throw new Error(created.error || 'Could not start the CSV import.');

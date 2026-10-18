@@ -3,6 +3,7 @@ import { Check, X, Calendar, Share2, FileAudio, Search, ShieldCheck, CheckCircle
 import type { ReleaseSubmission } from '@services/distributionSyncService';
 import { apiGet, apiPut } from '@lib/api/client';
 import { resolveMediaUrl } from '@/utils/mediaUrl';
+import { getSignedPrivateMediaUrl } from '@services/releaseService';
 
 export default function ReleasesReview() {
   const [submissions, setSubmissions] = useState<ReleaseSubmission[]>([]);
@@ -26,7 +27,7 @@ export default function ReleasesReview() {
           let status: ReleaseSubmission['status'] = 'submitted';
           if (rawStatus === 'APPROVED') status = 'approved';
           else if (rawStatus === 'REJECTED') status = 'rejected';
-          else if (rawStatus === 'PENDING' || rawStatus === 'DRAFT') status = 'submitted';
+          else if (rawStatus === 'PENDING' || rawStatus === 'DRAFT') status = 'draft';
           else if (rawStatus === 'REVIEW' || rawStatus === 'SUBMITTED') status = 'submitted';
           else if (rawStatus === 'RELEASED' || rawStatus === 'LIVE') status = 'live';
 
@@ -40,6 +41,15 @@ export default function ReleasesReview() {
             release_type: (ar.release_type?.toLowerCase() || 'single') as any,
             artist_name: ar.artist_name || ar.primaryArtist || ar.artist?.artist_name || '',
             genre: ar.genre || '',
+            subgenre: ar.subgenre || '',
+            release_version: ar.release_version || '',
+            language: ar.language || '',
+            featured_artists: ar.featured_artists || [],
+            label_name: ar.label_name || '',
+            copyright_c: ar.copyright_c || '',
+            copyright_p: ar.copyright_p || '',
+            notes: ar.notes || '',
+            tracks: ar.tracks || [],
             release_date: ar.release_date?.split('T')[0] || (ar.releaseDate ? String(ar.releaseDate).split('T')[0] : ''),
             cover_url: resolveMediaUrl(rawCover),
             audio_url: resolveMediaUrl(rawAudio),
@@ -70,24 +80,29 @@ export default function ReleasesReview() {
     loadData();
   }, []);
 
-  const handlePlayAudio = (item: ReleaseSubmission) => {
+  const handlePlayAudio = async (item: ReleaseSubmission) => {
     if (!item.audio_url) {
       setActionMsg(`Lagu "${item.title}" tidak memiliki file audio.`);
       setTimeout(() => setActionMsg(''), 4000);
       return;
     }
 
-    window.dispatchEvent(
+    try {
+      const privateAudioUrl = await getSignedPrivateMediaUrl(item.audio_url);
+      window.dispatchEvent(
       new CustomEvent('groovvy-play-track', {
         detail: {
           title: item.title,
           artist: item.artist_name,
           artwork: item.cover_url,
-          audioUrl: item.audio_url,
+          audioUrl: privateAudioUrl,
           duration: 210,
         },
       })
-    );
+      );
+    } catch (error) {
+      setActionMsg(error instanceof Error ? error.message : 'Preview audio tidak tersedia.');
+    }
   };
 
   const handleApprove = async (id: string, title: string) => {
@@ -97,7 +112,7 @@ export default function ReleasesReview() {
       await apiPut(`/api/admin/releases-review/${encodeURIComponent(id)}`, {
         status: 'approved',
       });
-      setActionMsg(`Rilis "${title}" berhasil disetujui (ACC) & otomatis masuk ke Katalog Musik!`);
+      setActionMsg(`Rilis "${title}" berhasil disetujui untuk status internal Breakout Music.`);
       setSelectedRelease(null);
       await loadData();
     } catch (err: any) {
@@ -117,6 +132,10 @@ export default function ReleasesReview() {
 
   const confirmReject = async () => {
     if (!selectedRelease) return;
+    if (!rejectReason.trim()) {
+      setActionMsg('Alasan penolakan wajib diisi.');
+      return;
+    }
     setProcessingId(selectedRelease.id);
     try {
       // 1. Update Neon PostgreSQL via Worker Admin endpoint
@@ -180,6 +199,7 @@ export default function ReleasesReview() {
           {[
             { id: 'all', label: 'Semua Rilis' },
             { id: 'submitted', label: 'Menunggu ACC' },
+            { id: 'draft', label: 'Draft artis' },
             { id: 'approved', label: 'Disetujui (ACC)' },
             { id: 'rejected', label: 'Ditolak / Revisi' },
           ].map((tab) => (
@@ -277,6 +297,26 @@ export default function ReleasesReview() {
                       </span>
                     )}
                   </div>
+                  <div className="mt-2 text-[10px] text-gray-500 space-y-1">
+                    <div>
+                      {item.language && <span>Bahasa: {item.language} · </span>}
+                      {item.subgenre && <span>Subgenre: {item.subgenre} · </span>}
+                      {item.release_version && <span>Versi: {item.release_version} · </span>}
+                      {item.upc && <span>UPC: {item.upc}</span>}
+                    </div>
+                    {item.featured_artists?.length ? <div>Featured: {item.featured_artists.join(', ')}</div> : null}
+                    {item.tracks?.map((track, index) => (
+                      <div key={track.id || index} className="text-gray-400">
+                        Track {track.track_number || index + 1}: {track.title}
+                        {track.isrc ? ` · ISRC ${track.isrc}` : ''}
+                        {track.composers?.length ? ` · Composer ${track.composers.join(', ')}` : ''}
+                        {track.songwriters?.length ? ` · Songwriter ${track.songwriters.join(', ')}` : ''}
+                        {track.producers?.length ? ` · Producer ${track.producers.join(', ')}` : ''}
+                        {track.arrangers?.length ? ` · Arranger ${track.arrangers.join(', ')}` : ''}
+                      </div>
+                    ))}
+                    {(item.copyright_c || item.copyright_p) && <div>{item.copyright_c || ''}{item.copyright_c && item.copyright_p ? ' · ' : ''}{item.copyright_p || ''}</div>}
+                  </div>
                 </div>
               </div>
 
@@ -308,6 +348,10 @@ export default function ReleasesReview() {
                   <span className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold flex items-center gap-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Telah Di-ACC (Approved)</span>
+                  </span>
+                ) : item.status === 'draft' ? (
+                  <span className="px-3 py-1.5 rounded-xl bg-white/[0.05] border border-white/[0.08] text-gray-400 text-xs font-bold">
+                    Draft — belum diajukan
                   </span>
                 ) : (
                   <div className="text-right">

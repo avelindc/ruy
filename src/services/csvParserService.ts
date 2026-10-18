@@ -12,6 +12,7 @@ export interface ParsedRow {
   revenue: number;
   currency: string;
   sourceRowHash: string;
+  sourceRowIdentity: string;
   rawRow: string;
 }
 
@@ -51,7 +52,7 @@ const COLUMN_PATTERNS = {
  */
 export async function parseCSVFile(file: File): Promise<{ headers: string[]; error?: string }> {
   try {
-    if (!file.type.includes('csv') && !file.name.endsWith('.csv')) {
+    if (!file.type.includes('csv') && !file.name.toLowerCase().endsWith('.csv')) {
       throw new Error('Invalid file format. Only CSV files are supported.');
     }
 
@@ -60,13 +61,12 @@ export async function parseCSVFile(file: File): Promise<{ headers: string[]; err
     }
 
     const text = await file.text();
-    const lines = text.split('\n').filter(line => line.trim());
-
-    if (lines.length === 0) {
+    const records = parseCSVRecords(text);
+    if (records.length === 0) {
       throw new Error('CSV file is empty');
     }
-
-    const headers = lines[0].split(',').map(h => h.trim());
+    const headers = [...records[0].values];
+    headers[0] = headers[0].replace(/^\uFEFF/, '').trim();
 
     if (headers.length === 0) {
       throw new Error('CSV file has no headers');
@@ -114,13 +114,12 @@ export async function validateCSVRows(
   maxRows: number = 100000
 ): Promise<ParseResult> {
   try {
-    const lines = csvText.split('\n').filter(line => line.trim());
-
-    if (lines.length < 2) {
+    const records = parseCSVRecords(csvText);
+    if (records.length < 2) {
       throw new Error('CSV file must have headers and at least one data row');
     }
-
-    const headers = lines[0].split(',').map(h => h.trim());
+    const headers = [...records[0].values];
+    headers[0] = headers[0].replace(/^\uFEFF/, '').trim();
 
     // Verify required columns are mapped
     const requiredFields = ['isrc', 'platform', 'territory', 'reportingPeriod', 'streams'];
@@ -137,15 +136,14 @@ export async function validateCSVRows(
     let processedRows = 0;
 
     // Process data rows (skip header)
-    for (let i = 1; i < Math.min(lines.length, maxRows + 1); i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
+    for (let i = 1; i < Math.min(records.length, maxRows + 1); i++) {
+      const record = records[i];
+      if (record.values.length === 1 && !record.values[0]) continue;
 
       processedRows++;
 
       try {
-        const values = parseCSVLine(line);
-        const row = await extractRow(values, mappings);
+        const row = await extractRow(record.values, mappings, record.raw);
 
         // Validate individual fields
         const validation = validateRow(row);
@@ -154,7 +152,7 @@ export async function validateCSVRows(
             rowNumber: i,
             errorCode: validation.errorCode || 'VALIDATION_ERROR',
             errorMessage: validation.error,
-            rawRow: line,
+            rawRow: record.raw,
           });
         } else {
           validRows.push(row);
@@ -165,12 +163,12 @@ export async function validateCSVRows(
           rowNumber: i,
           errorCode: 'PARSE_ERROR',
           errorMessage: message,
-          rawRow: line,
+          rawRow: record.raw,
         });
       }
     }
 
-    if (processedRows >= maxRows) {
+    if (records.length - 1 > maxRows) {
       throw new Error(`CSV exceeds maximum ${maxRows} rows`);
     }
 
@@ -187,43 +185,57 @@ export async function validateCSVRows(
   }
 }
 
-/**
- * Parse CSV line handling quoted fields
- */
-function parseCSVLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    const nextChar = line[i + 1];
-
+/** RFC-style parsing for escaped quotes, commas, CRLF, and embedded newlines. */
+function parseCSVRecords(text: string): Array<{ values: string[]; raw: string }> {
+  const records: Array<{ values: string[]; raw: string }> = [];
+  let values: string[] = [];
+  let value = '';
+  let raw = '';
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
     if (char === '"') {
-      if (inQuotes && nextChar === '"') {
-        current += '"';
-        i++; // Skip next quote
+      if (quoted && text[index + 1] === '"') {
+        value += '"';
+        raw += '""';
+        index += 1;
       } else {
-        inQuotes = !inQuotes;
+        quoted = !quoted;
+        raw += char;
       }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
+      continue;
     }
+    if (!quoted && char === ',') {
+      values.push(value.trim());
+      value = '';
+      raw += char;
+      continue;
+    }
+    if (!quoted && (char === '\n' || char === '\r')) {
+      values.push(value.trim());
+      if (values.length > 1 || values[0]) records.push({ values, raw });
+      values = [];
+      value = '';
+      raw = '';
+      if (char === '\r' && text[index + 1] === '\n') index += 1;
+      continue;
+    }
+    value += char;
+    raw += char;
   }
-
-  result.push(current.trim());
-  return result;
+  if (quoted) throw new Error('CSV contains an unterminated quoted field.');
+  if (value.length || values.length || raw.length) {
+    values.push(value.trim());
+    if (values.length > 1 || values[0]) records.push({ values, raw });
+  }
+  return records;
 }
 
 /**
  * Extract row data using column mappings
  */
-async function extractRow(values: string[], mappings: ColumnMapping): Promise<ParsedRow> {
+async function extractRow(values: string[], mappings: ColumnMapping, rawRow: string): Promise<ParsedRow> {
   const rowData: Record<string, any> = {};
-  const rawRow = values.join(',');
 
   // Extract fields based on mappings
   for (const [columnIndex, fieldName] of Object.entries(mappings)) {
@@ -234,21 +246,29 @@ async function extractRow(values: string[], mappings: ColumnMapping): Promise<Pa
 
   // Create row with defaults
   const row: ParsedRow = {
-    isrc: rowData.isrc || '',
-    upc: rowData.upc || undefined,
-    platform: rowData.platform || '',
-    territory: rowData.territory || '',
-    reportingPeriod: rowData.reportingPeriod || '',
+    isrc: String(rowData.isrc || '').trim().toUpperCase(),
+    upc: String(rowData.upc || '').trim() || undefined,
+    platform: String(rowData.platform || '').trim(),
+    territory: String(rowData.territory || '').trim().toUpperCase(),
+    reportingPeriod: String(rowData.reportingPeriod || '').trim(),
     streams: rowData.streams ? parseInt(rowData.streams) : 0,
     revenue: rowData.revenue ? parseFloat(rowData.revenue) : 0,
-    currency: rowData.currency ? rowData.currency.toUpperCase() : 'USD',
+    currency: rowData.currency ? String(rowData.currency).trim().toUpperCase() : 'USD',
     sourceRowHash: '',
+    sourceRowIdentity: '',
     rawRow,
   };
 
   // Calculate source row hash for deduplication
-  const hashInput = `${row.isrc}|${row.platform}|${row.territory}|${row.reportingPeriod}|${row.streams}`;
+  const hashInput = [
+    row.isrc.trim().toUpperCase(), row.upc?.trim() || '', row.platform.trim().toLowerCase(),
+    row.territory.trim().toUpperCase(), row.reportingPeriod.trim(), String(row.streams),
+    String(row.revenue), row.currency.trim().toUpperCase(),
+  ].join('|');
   row.sourceRowHash = await sha256(hashInput);
+  const identityInput = [row.isrc.trim().toUpperCase(), row.upc?.trim() || '', row.platform.trim().toLowerCase(),
+    row.territory.trim().toUpperCase(), row.reportingPeriod.trim()].join('|');
+  row.sourceRowIdentity = `row:${await sha256(identityInput)}`;
 
   return row;
 }
@@ -371,11 +391,15 @@ export async function matchReleaseByUPC(upc: string): Promise<{ releaseId?: stri
  */
 export async function checkDuplicate(
   reportId: string,
-  sourceRowHash: string
+  sourceRowHash: string,
+  sourceRowIdentity?: string,
 ): Promise<{ isDuplicate: boolean; error?: string }> {
   try {
     void reportId;
-    const response = await apiGet<any>(`/api/streaming/duplicate?source_row_hash=${encodeURIComponent(sourceRowHash)}`);
+    const params = new URLSearchParams();
+    params.set('source_row_hash', sourceRowHash);
+    if (sourceRowIdentity) params.set('source_row_identity', sourceRowIdentity);
+    const response = await apiGet<any>(`/api/streaming/duplicate?${params.toString()}`);
     return { isDuplicate: response.data?.is_duplicate === true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to check duplicate';

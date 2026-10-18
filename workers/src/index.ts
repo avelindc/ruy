@@ -44,6 +44,11 @@ export default {
       }
 
       // Storage get endpoint (public or token validated)
+      if (pathname === '/api/storage/sign' && request.method === 'POST') {
+        const { handleStorageSign } = await import('./handlers/storageHandler');
+        const adapter = await createAdapter(env);
+        return handleStorageSign(request, env, adapter, headers);
+      }
       if (pathname.startsWith('/api/storage/')) {
         const { handleStorageGet } = await import('./handlers/storageHandler');
         const fileKey = pathname.replace(/^\/api\/storage\//, '');
@@ -101,6 +106,11 @@ export default {
         return handleWithdrawals(request, env, adapter, headers);
       }
 
+      if (pathname === '/api/financial-ledger') {
+        const { handleFinancialLedger } = await import('./handlers/adminHandler');
+        return handleFinancialLedger(request, adapter, headers, env, false);
+      }
+
       // Public CMS endpoints (no auth required)
       if (pathname === '/api/public/landing' || pathname === '/api/cms/landing') {
         const { handlePublicLanding } = await import('./handlers/cmsHandler');
@@ -133,7 +143,7 @@ export default {
           return handleAdminCms(request, adapter, headers, env);
         }
 
-        const { handleAdminUsers, handleAuditLogs, handleAdminWithdrawals, handleReleaseReview, handleCsvImport } = await import('./handlers/adminHandler');
+        const { handleAdminUsers, handleAuditLogs, handleAdminWithdrawals, handleReleaseReview, handleCsvImport, handleAdminRoyaltyRules, handleFinancialLedger } = await import('./handlers/adminHandler');
 
         if (pathname.startsWith('/api/admin/users')) {
           return handleAdminUsers(request, adapter, headers, env);
@@ -153,6 +163,14 @@ export default {
 
         if (pathname.startsWith('/api/admin/csv-import')) {
           return handleCsvImport(request, adapter, headers, env);
+        }
+
+        if (pathname === '/api/admin/royalty-rules') {
+          return handleAdminRoyaltyRules(request, adapter, headers, env);
+        }
+
+        if (pathname === '/api/admin/financial-ledger') {
+          return handleFinancialLedger(request, adapter, headers, env, true);
         }
       }
 
@@ -218,7 +236,7 @@ async function handleArtists(
 
     // GET /api/artists (list artists)
     if (request.method === 'GET' && pathname === '/api/artists') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const requestedOwnerId = url.searchParams.get('owner_id');
       const role = await getUserRole(authContext.userId, adapter);
       const isAdmin = role === 'admin' || role === 'super_admin';
@@ -246,6 +264,7 @@ async function handleArtists(
     // GET /api/artists/:id (get single artist)
     const artistMatch = pathname.match(/^\/api\/artists\/([^/]+)$/);
     if (request.method === 'GET' && artistMatch) {
+      const authContext = await requireAuth(request, env, adapter);
       const artistId = decodeURIComponent(artistMatch[1]);
       const artist = await adapter.getArtist(artistId);
 
@@ -253,12 +272,14 @@ async function handleArtists(
         throw new NotFoundError(`Artist ${artistId} not found`);
       }
 
+      await requireOwnership(authContext, artist.owner_id, adapter);
+
       return jsonResponse({ success: true, data: artist }, 200, headers);
     }
 
     // POST /api/artists (create artist)
     if (request.method === 'POST' && pathname === '/api/artists') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const body = (await request.json()) as ArtistInput;
 
       if (!body.artist_name) {
@@ -272,7 +293,7 @@ async function handleArtists(
 
     // PUT /api/artists/:id (update artist)
     if (request.method === 'PUT' && artistMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const artistId = decodeURIComponent(artistMatch[1]);
 
       const artist = await adapter.getArtist(artistId);
@@ -290,7 +311,7 @@ async function handleArtists(
 
     // DELETE /api/artists/:id (delete artist)
     if (request.method === 'DELETE' && artistMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const artistId = decodeURIComponent(artistMatch[1]);
 
       const artist = await adapter.getArtist(artistId);
@@ -316,7 +337,7 @@ async function handleArtists(
 // RELEASES ENDPOINT
 // ============================================================================
 
-async function handleReleases(
+export async function handleReleases(
   request: Request,
   env: Env,
   adapter: DatabaseAdapter,
@@ -327,7 +348,7 @@ async function handleReleases(
     const pathname = url.pathname;
 
     if (request.method === 'GET' && pathname === '/api/releases/by-upc') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       await requireAdmin(authContext, adapter);
       const upc = url.searchParams.get('upc')?.trim();
       if (!upc) throw new ValidationError('upc is required');
@@ -337,7 +358,7 @@ async function handleReleases(
 
     // GET /api/releases (list releases)
     if (request.method === 'GET' && pathname === '/api/releases') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const role = await getUserRole(authContext.userId, adapter);
       const isAdmin = role === 'admin' || role === 'super_admin';
       const requestedOwnerId = url.searchParams.get('owner_id');
@@ -378,10 +399,20 @@ async function handleReleases(
       );
     }
 
+    const historyMatch = pathname.match(/^\/api\/releases\/([^/]+)\/history$/);
+    if (request.method === 'GET' && historyMatch) {
+      const authContext = await requireAuth(request, env, adapter);
+      const release = await adapter.getRelease(decodeURIComponent(historyMatch[1]));
+      if (!release) throw new NotFoundError('Release not found.');
+      await requireOwnership(authContext, release.owner_id, adapter);
+      const history = await adapter.getReleaseStatusHistory(release.id);
+      return jsonResponse({ success: true, data: history }, 200, headers);
+    }
+
     // GET /api/releases/:id (get single release - strictly protected)
     const releaseMatch = pathname.match(/^\/api\/releases\/([^/]+)$/);
     if (request.method === 'GET' && releaseMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const releaseId = decodeURIComponent(releaseMatch[1]);
       const release = await adapter.getRelease(releaseId);
 
@@ -397,7 +428,7 @@ async function handleReleases(
 
     // POST /api/releases (create release)
     if (request.method === 'POST' && pathname === '/api/releases') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const body = (await request.json()) as ReleaseInput;
 
       if (!body.title) {
@@ -411,7 +442,7 @@ async function handleReleases(
 
     // PUT /api/releases/:id (update release)
     if (request.method === 'PUT' && releaseMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const releaseId = decodeURIComponent(releaseMatch[1]);
 
       const release = await adapter.getRelease(releaseId);
@@ -422,6 +453,12 @@ async function handleReleases(
       await requireOwnership(authContext, release.owner_id, adapter);
 
       const body = (await request.json()) as Partial<ReleaseInput>;
+      if ('status' in (body as Record<string, unknown>)) {
+        throw new AuthorizationError('Release status can only be changed through the admin review workflow.');
+      }
+      if (release.status !== 'draft' && release.status !== 'rejected') {
+        throw new AuthorizationError('Release metadata can only be edited while the submission is a draft or rejected.');
+      }
       const updated = await adapter.updateRelease(releaseId, body);
 
       return jsonResponse({ success: true, data: updated }, 200, headers);
@@ -429,7 +466,7 @@ async function handleReleases(
 
     // DELETE /api/releases/:id (delete release)
     if (request.method === 'DELETE' && releaseMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const releaseId = decodeURIComponent(releaseMatch[1]);
 
       const release = await adapter.getRelease(releaseId);
@@ -438,6 +475,9 @@ async function handleReleases(
       }
 
       await requireOwnership(authContext, release.owner_id, adapter);
+      if (release.status !== 'draft' && release.status !== 'rejected') {
+        throw new AuthorizationError('Only draft or rejected releases can be deleted.');
+      }
       await adapter.deleteRelease(releaseId);
 
       return jsonResponse({ success: true, data: {} }, 200, headers);
@@ -467,7 +507,7 @@ async function handleTracks(
 
     // GET /api/tracks (list tracks)
     if (request.method === 'GET' && pathname === '/api/tracks') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const role = await getUserRole(authContext.userId, adapter);
       const isAdmin = role === 'admin' || role === 'super_admin';
 
@@ -518,7 +558,7 @@ async function handleTracks(
     // GET /api/tracks/:id (get single track)
     const trackMatch = pathname.match(/^\/api\/tracks\/([^/]+)$/);
     if (request.method === 'GET' && trackMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const trackId = decodeURIComponent(trackMatch[1]);
       const track = await adapter.getTrack(trackId);
 
@@ -534,7 +574,7 @@ async function handleTracks(
 
     // POST /api/tracks (create track)
     if (request.method === 'POST' && pathname === '/api/tracks') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const body = (await request.json()) as TrackInput & { release_id: string };
 
       if (!body.release_id || !body.title) {
@@ -555,7 +595,7 @@ async function handleTracks(
 
     // PUT /api/tracks/:id (update track)
     if (request.method === 'PUT' && trackMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const trackId = decodeURIComponent(trackMatch[1]);
 
       const track = await adapter.getTrack(trackId);
@@ -573,7 +613,7 @@ async function handleTracks(
 
     // DELETE /api/tracks/:id (delete track)
     if (request.method === 'DELETE' && trackMatch) {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const trackId = decodeURIComponent(trackMatch[1]);
 
       const track = await adapter.getTrack(trackId);
@@ -609,15 +649,17 @@ async function handleStreaming(
     const url = new URL(request.url);
 
     if (request.method === 'GET') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const role = await getUserRole(authContext.userId, adapter);
       const isAdmin = role === 'admin' || role === 'super_admin';
 
       if (url.pathname === '/api/streaming/duplicate') {
         if (!isAdmin) throw new AuthorizationError('Admin access required');
         const sourceRowHash = url.searchParams.get('source_row_hash')?.trim();
-        if (!sourceRowHash) throw new ValidationError('source_row_hash is required');
-        const isDuplicate = await adapter.hasStreamingDuplicate(sourceRowHash);
+        const sourceRowIdentity = url.searchParams.get('source_row_identity')?.trim();
+        if (!sourceRowHash && !sourceRowIdentity) throw new ValidationError('source_row_hash or source_row_identity is required');
+        const isDuplicate = (sourceRowHash ? await adapter.hasStreamingDuplicate(sourceRowHash) : false)
+          || (sourceRowIdentity ? await adapter.hasStreamingIdentityDuplicate(sourceRowIdentity) : false);
         return jsonResponse({ success: true, data: { is_duplicate: isDuplicate } }, 200, headers);
       }
 
@@ -689,7 +731,7 @@ async function handleStreaming(
 // ROYALTIES ENDPOINT
 // ============================================================================
 
-async function handleRoyalties(
+export async function handleRoyalties(
   request: Request,
   env: Env,
   adapter: DatabaseAdapter,
@@ -699,7 +741,7 @@ async function handleRoyalties(
     const url = new URL(request.url);
 
     if (request.method === 'GET') {
-      const authContext = await requireAuth(request, env);
+      const authContext = await requireAuth(request, env, adapter);
       const role = await getUserRole(authContext.userId, adapter);
       const isAdmin = role === 'admin' || role === 'super_admin';
 
@@ -708,6 +750,11 @@ async function handleRoyalties(
       const endDate = url.searchParams.get('end_date');
       const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10), 1), 500);
       const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10), 0);
+
+      if (url.pathname === '/api/royalties/calculation-items') {
+        const result = await adapter.getRoyaltyCalculationItemsForOwner(authContext.userId, limit, offset);
+        return jsonResponse({ success: true, data: { data: result.data, total: result.total, limit, offset } }, 200, headers);
+      }
 
       let artistIds: string[];
       if (requestedArtistId && requestedArtistId !== authContext.userId) {
@@ -762,7 +809,7 @@ async function handleWithdrawals(
   headers: Record<string, string>
 ): Promise<Response> {
   try {
-    const authContext = await requireAuth(request, env);
+    const authContext = await requireAuth(request, env, adapter);
 
     if (request.method === 'GET') {
       const url = new URL(request.url);
