@@ -10,6 +10,11 @@ export interface AuthUser {
   email: string;
   fullName: string;
   role: string;
+  artistId?: string;
+}
+
+function normalizeArtistId(value: unknown): string | undefined {
+  return typeof value === 'string' && /^\d{14}$/.test(value) ? value : undefined;
 }
 
 export interface AuthResponse {
@@ -46,6 +51,7 @@ function normalizeAuthResponse(value: any): AuthResponse {
       role: typeof value.user.role === 'string' && value.user.role.trim()
         ? value.user.role.toLowerCase().trim()
         : 'user',
+      artistId: normalizeArtistId(value.user.artistId),
     },
   };
 }
@@ -60,6 +66,7 @@ export interface VerifiedSessionUser {
   id: string;
   email: string;
   role: string;
+  artistId?: string;
 }
 
 import { getApiBaseUrl } from '@config/apiConfig';
@@ -193,6 +200,7 @@ export async function validateSession(token: string): Promise<VerifiedSessionUse
     id: user.id,
     email: user.email,
     role: user.role.toLowerCase().trim(),
+    artistId: normalizeArtistId(user.artistId),
   };
 }
 

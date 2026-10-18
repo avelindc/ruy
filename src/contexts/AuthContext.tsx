@@ -85,6 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         id: verifiedUser.id,
         email: verifiedUser.email,
         role: verifiedUser.role,
+        artistId: verifiedUser.artistId,
       };
       localStorage.setItem('authUser', JSON.stringify(restoredUser));
       setToken(storedToken);

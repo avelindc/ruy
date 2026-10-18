@@ -21,6 +21,7 @@ import type {
 export interface NeonUser {
   id: string;
   email: string;
+  artist_id?: string | null;
   password_hash: string;
   full_name?: string;
   avatar_url?: string;
@@ -35,6 +36,7 @@ export interface NeonUser {
 export function transformNeonUser(neonUser: NeonUser): User {
   return {
     id: neonUser.id,
+    artist_id: neonUser.artist_id || undefined,
     full_name: neonUser.full_name || '',
     email: neonUser.email,
     avatar_url: neonUser.avatar_url || undefined,

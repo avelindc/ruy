@@ -4,6 +4,7 @@ export interface AuthUser {
   id: string;
   email?: string;
   full_name?: string;
+  artistId?: string;
 }
 
 export interface AuthState {
@@ -22,6 +23,7 @@ export function useAuth(): AuthState {
           id: user.id,
           email: user.email,
           full_name: user.fullName,
+          artistId: user.artistId,
         }
       : null,
     profile: null,

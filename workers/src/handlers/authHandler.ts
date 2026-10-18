@@ -176,6 +176,7 @@ export async function handleLogin(
           email: user.email,
           fullName: user.full_name,
           role: normalizedRole,
+          artistId: user.artist_id,
         },
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -291,6 +292,7 @@ export async function handleRegister(
           email: newUser.email,
           fullName: newUser.full_name,
           role: 'user',
+          artistId: newUser.artist_id,
         },
       }),
       { status: 201, headers: { 'Content-Type': 'application/json' } }

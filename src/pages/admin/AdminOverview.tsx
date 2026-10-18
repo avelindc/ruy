@@ -11,7 +11,7 @@ import {
   Tooltip,
   Cell
 } from 'recharts';
-import { getAdminStats, getPendingReleases } from '@services/adminService';
+import { getAdminStats } from '@services/adminService';
 import { getAdminWithdrawalRequests, type WithdrawalRecord } from '@services/withdrawalService';
 import { apiGet } from '@lib/api/client';
 import { useAuth } from '@contexts/AuthContext';
@@ -37,8 +37,6 @@ export default function AdminOverview() {
   const [searchQuery, setSearchQuery] = useState('');
 
   const [, setLoading] = useState(true);
-  const [stats, setStats] = useState<any>(null);
-  const [pendingReleases, setPendingReleases] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
   const [streamingRecords, setStreamingRecords] = useState<any[]>([]);
   const [royaltyTotals, setRoyaltyTotals] = useState({
@@ -52,19 +50,12 @@ export default function AdminOverview() {
     try {
       setLoading(true);
 
-      const [statsRes, releasesRes, withdrawalsRes, streamingRes] = await Promise.allSettled([
+      const [statsRes, withdrawalsRes, streamingRes] = await Promise.allSettled([
         getAdminStats(),
-        getPendingReleases(5),
         getAdminWithdrawalRequests(),
         apiGet<any>('/api/streaming?limit=500'),
       ]);
 
-      if (statsRes.status === 'fulfilled' && statsRes.value?.data) {
-        setStats(statsRes.value.data);
-      }
-      if (releasesRes.status === 'fulfilled' && releasesRes.value?.data) {
-        setPendingReleases(releasesRes.value.data);
-      }
       const apiWithdrawals: WithdrawalRecord[] = withdrawalsRes.status === 'fulfilled' ? withdrawalsRes.value.data : [];
       setWithdrawals(apiWithdrawals);
       const apiStreaming = streamingRes.status === 'fulfilled' ? (streamingRes.value.data?.data || []) : [];
@@ -137,10 +128,6 @@ export default function AdminOverview() {
 
   const adminName = user?.fullName || (user?.email ? user.email.split('@')[0] : 'Administrator');
   const userInitials = adminName.slice(0, 2).toUpperCase();
-
-  const primaryPendingTitle = pendingReleases[0]?.title || 'No release pending';
-
-  const primaryPendingIsrc = pendingReleases[0]?.isrc || '';
 
   return (
     <div className="w-full space-y-6 min-w-0 font-sans text-white select-none">
@@ -283,48 +270,30 @@ export default function AdminOverview() {
 
               {/* LEFT HALF: Overlapping Stylized Platform Card Stack */}
               <div className="md:col-span-6 flex items-center justify-center py-2">
-                <div
-                  onClick={() => navigate('/admin/withdrawals')}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      navigate('/admin/withdrawals');
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  title="Buka Manajemen Penarikan"
-                  className="relative w-full max-w-[290px] h-[175px] cursor-pointer group focus:outline-none focus:ring-2 focus:ring-[#FF6A3D]/50 rounded-[24px]"
-                >
+                <div className="relative w-full max-w-[290px] h-[175px] group rounded-[24px]" aria-label="Artist ID card">
 
                   {/* Back Card (Orange Glow Platform Vault Card) */}
                   <div className="absolute right-0 top-3 w-[88%] h-[155px] rounded-[22px] bg-gradient-to-tr from-[#FF6A3D] to-[#FF8C61] shadow-[0_12px_28px_rgba(255,106,61,0.3)] opacity-95 transform translate-x-3 translate-y-1 overflow-hidden p-4 flex flex-col justify-between transition-transform duration-300 group-hover:translate-x-3.5 group-hover:translate-y-1.5">
                     <div className="flex justify-between items-center text-white/90">
-                      <span className="text-[11px] font-bold tracking-wider">Admin Vault</span>
+                      <span className="text-[11px] font-bold tracking-wider">BREAKOUT MUSIC</span>
                       <Radio className="w-4 h-4 text-white/80" />
                     </div>
                     <div className="flex items-center justify-between text-white font-extrabold tracking-wider">
-                      <span className="text-sm">NEON DB</span>
-                      <span className="text-xs opacity-75">{stats ? `${stats.totalUsers} USERS` : 'WORKER API'}</span>
+                      <span className="text-sm">ARTIST ID</span>
+                      <span className="text-xs opacity-75">MEMBER CARD</span>
                     </div>
                   </div>
 
                   {/* Front Card (Frosted Glassmorphic Visa/Admin Card) */}
-                  <div
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate('/admin/withdrawals');
-                    }}
-                    className="absolute left-0 top-0 w-[90%] h-[165px] rounded-[22px] bg-gradient-to-br from-[#2f313e]/90 via-[#22232c]/95 to-[#16171f]/95 border border-white/[0.12] shadow-2xl p-4 sm:p-5 flex flex-col justify-between backdrop-blur-md cursor-pointer group-hover:scale-[1.02] transition-transform duration-300"
-                  >
+                  <div className="absolute left-0 top-0 w-[90%] h-[165px] rounded-[22px] bg-gradient-to-br from-[#2f313e]/90 via-[#22232c]/95 to-[#16171f]/95 border border-white/[0.12] shadow-2xl p-4 sm:p-5 flex flex-col justify-between backdrop-blur-md group-hover:scale-[1.02] transition-transform duration-300">
                     {/* Top Row: Release / Card Title + Gold Chip */}
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-[11px] font-bold text-gray-200 tracking-wide block truncate max-w-[150px]">
-                          {primaryPendingTitle}
+                          BREAKOUT MUSIC
                         </span>
                         <span className="text-[9px] text-[#A855F7] font-semibold tracking-wider uppercase">
-                          Admin Operations
+                          ARTIST ID
                         </span>
                       </div>
 
@@ -337,21 +306,19 @@ export default function AdminOverview() {
                       </div>
                     </div>
 
-                    {/* Middle Row: Monospace Dots / ISRC Code */}
+                    {/* Middle Row: Persistent account ID from the authenticated user record */}
                     <div className="space-y-0.5">
                       <p className="text-xs font-mono font-bold tracking-widest text-gray-300 truncate">
-                        {primaryPendingIsrc ? `ISRC/UPC ${primaryPendingIsrc}` : 'No identifier available'}
+                        {user?.artistId ? `No: ${user.artistId}` : 'ID belum tersedia'}
                       </p>
                       <p className="text-[9px] text-[#8E92A0] font-mono tracking-tight truncate">
-                        {pendingReleases[0]?.created_at ? `Submitted ${new Date(pendingReleases[0].created_at).toLocaleDateString()}` : 'Release review queue'}
+                        {user?.fullName || user?.email || 'Akun artis'}
                       </p>
                     </div>
 
                     {/* Bottom Row: Expiry & Bold VISA / Breakout Logo */}
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-mono font-semibold text-gray-400">
-                        {pendingReleases[0]?.status || '—'}
-                      </span>
+                      <span className="text-[10px] font-mono font-semibold text-gray-400">ARTIST ACCOUNT</span>
                       <span className="text-lg font-black tracking-tighter text-white font-sans italic">
                         BREAKOUT
                       </span>

@@ -54,6 +54,7 @@ export async function handleAuthRoute(
               id: authContext.userId,
               email: authContext.email,
               role: authContext.role,
+              artistId: authContext.artistId,
             },
           },
         },

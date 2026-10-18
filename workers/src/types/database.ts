@@ -13,6 +13,7 @@
 export interface User {
   id: string;
   email: string;
+  artist_id?: string;
   password_hash?: string;
   full_name?: string;
   avatar_url?: string;

@@ -13,6 +13,7 @@ import { getJwtVerifier } from '../auth/verifierFactory';
 export interface AuthContext {
   userId: string;
   email: string;
+  artistId?: string;
   role: 'user' | 'admin' | 'super_admin';
   token: string;
   sessionId: string;
@@ -125,6 +126,7 @@ export async function requireAuth(
     throw new AuthenticationError('Session is invalid or has expired');
   }
   context.email = user.email;
+  context.artistId = user.artist_id;
   context.role = user.role || 'user';
   return context;
 }
