@@ -216,16 +216,35 @@ test('CSV revenue corrections with an existing natural row identity are blocked 
   assert.match(adapter.writes.errors[0].error_message, /correction workflow/i);
 });
 
-test('release creation persists structured credits and rights metadata through parameterized Neon writes', async () => {
+test('composer and producer credits remain available to admin review after release approval', async () => {
   const calls = [];
+  let releaseRecord;
+  let savedTrack;
   const client = {
     async query(sql, values = []) {
       calls.push({ sql, values });
       if (sql.includes('SELECT id, "stageName" FROM "Artist"')) return { rows: [{ id: releaseId, stageName: 'Artist Name' }] };
       if (sql.includes('INSERT INTO "Release"')) return { rows: [{
-        id: releaseId, artistId: releaseId, title: 'Release title', type: 'SINGLE',
-        releaseDate: '2026-06-01', status: 'PENDING', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        ...(releaseRecord = {
+          id: values[0], artistId: releaseId, title: 'Release title', type: 'SINGLE',
+          releaseDate: '2026-06-01', status: 'PENDING', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }),
       }] };
+      if (sql.includes('INSERT INTO "Track"')) {
+        savedTrack = {
+          id: trackId, releaseId: values[0], title: values[1], audioUrl: values[2],
+          isrc: values[3], composerNames: values[8], producerNames: values[10],
+          createdAt: new Date().toISOString(),
+        };
+        return { rows: [] };
+      }
+      if (sql.includes('WITH prior AS MATERIALIZED')) {
+        releaseRecord.status = values[1];
+        return { rows: [{ ...releaseRecord, previousStatus: values[1] === 'REVIEW' ? 'PENDING' : 'REVIEW' }] };
+      }
+      if (sql.includes('SELECT "userId" FROM "Artist"')) return { rows: [{ userId: artistId }] };
+      if (sql.includes('SELECT "userId", "stageName" FROM "Artist"')) return { rows: [{ userId: artistId, stageName: 'Artist Name' }] };
+      if (sql.includes('SELECT * FROM "Track"')) return { rows: [savedTrack] };
       return { rows: [] };
     },
     async transaction(queries) {
@@ -237,20 +256,21 @@ test('release creation persists structured credits and rights metadata through p
   const adapter = new NeonAdapter(client);
   await adapter.createRelease(artistId, {
     title: 'Release title', release_type: 'single', primary_artist_id: releaseId,
-    release_date: '2026-06-01', genre: 'Electronic', language: 'en',
-    self_released: true, distribution_rights_confirmed: true,
-    featured_artists: ['Featured One'],
-    tracks: [{ title: 'Track title', composers: ['Composer One', 'Composer Two'], songwriters: ['Writer One'], producers: ['Producer One'], distribution_rights_confirmed: true }],
+    release_date: '2026-06-01', genre: 'Electronic', distribution_rights_confirmed: true,
+    tracks: [{ title: 'Track title', composers: ['Composer One', 'Composer Two'], producers: ['Producer One'], distribution_rights_confirmed: true }],
   });
   const releaseInsert = calls.find((call) => call.sql.includes('INSERT INTO "Release"'));
-  assert.match(releaseInsert.sql, /"releaseVersion"/);
-  assert.equal(releaseInsert.values[13], true);
-  assert.equal(releaseInsert.values[17], true);
   const trackInsert = calls.find((call) => call.sql.includes('INSERT INTO "Track"'));
   assert.deepEqual(trackInsert.values[8], ['Composer One', 'Composer Two']);
-  assert.deepEqual(trackInsert.values[9], ['Writer One']);
   assert.deepEqual(trackInsert.values[10], ['Producer One']);
-  assert.equal(trackInsert.values[15], true);
+
+  await adapter.updateReleaseStatus(releaseInsert.values[0], 'REVIEW', undefined, adminId);
+  const approved = await adapter.updateReleaseStatus(releaseInsert.values[0], 'APPROVED', undefined, adminId);
+  const statusUpdates = calls.filter((call) => call.sql.includes('WITH prior AS MATERIALIZED'));
+  assert.equal(approved.status, 'approved');
+  assert.ok(statusUpdates.every((call) => !/UPDATE\s+"Track"/i.test(call.sql)));
+  assert.deepEqual(approved.tracks[0].composers, ['Composer One', 'Composer Two']);
+  assert.deepEqual(approved.tracks[0].producers, ['Producer One']);
 });
 
 test('admin rejection requires a reason and records it through the status-transition adapter', async () => {

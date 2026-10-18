@@ -62,28 +62,9 @@ export default function ReleasesPage() {
   const [selectedArtistId, setSelectedArtistId] = useState('');
   const [artistName, setArtistName] = useState('');
   const [genre, setGenre] = useState('Pop');
-  const [subgenre, setSubgenre] = useState('');
-  const [releaseVersion, setReleaseVersion] = useState('');
-  const [language, setLanguage] = useState('');
-  const [originalReleaseDate, setOriginalReleaseDate] = useState('');
-  const [featuredArtists, setFeaturedArtists] = useState('');
-  const [labelName, setLabelName] = useState('');
-  const [selfReleased, setSelfReleased] = useState(true);
-  const [copyrightC, setCopyrightC] = useState('');
-  const [copyrightP, setCopyrightP] = useState('');
-  const [releaseNotes, setReleaseNotes] = useState('');
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
-  const [trackVersion, setTrackVersion] = useState('');
-  const [trackTitle, setTrackTitle] = useState('');
-  const [trackNumber, setTrackNumber] = useState(1);
-  const [discNumber, setDiscNumber] = useState(1);
   const [composers, setComposers] = useState('');
-  const [songwriters, setSongwriters] = useState('');
   const [producers, setProducers] = useState('');
-  const [arrangers, setArrangers] = useState('');
-  const [trackFeaturedArtists, setTrackFeaturedArtists] = useState('');
-  const [explicitContent, setExplicitContent] = useState(false);
-  const [rightsOwnership, setRightsOwnership] = useState('');
   const [releaseDate, setReleaseDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 14);
@@ -131,28 +112,9 @@ export default function ReleasesPage() {
     setTitle('');
     setReleaseType('single');
     setGenre('Pop');
-    setSubgenre('');
-    setReleaseVersion('');
-    setLanguage('');
-    setOriginalReleaseDate('');
-    setFeaturedArtists('');
-    setLabelName('');
-    setSelfReleased(true);
-    setCopyrightC('');
-    setCopyrightP('');
-    setReleaseNotes('');
     setRightsConfirmed(false);
-    setTrackVersion('');
-    setTrackTitle('');
-    setTrackNumber(1);
-    setDiscNumber(1);
     setComposers('');
-    setSongwriters('');
     setProducers('');
-    setArrangers('');
-    setTrackFeaturedArtists('');
-    setExplicitContent(false);
-    setRightsOwnership('');
     setCoverUrl('');
     setCoverUploading(false);
     setCoverProgress(0);
@@ -425,36 +387,18 @@ export default function ReleasesPage() {
         release_type: releaseType,
         primary_artist_id: finalArtistId || undefined,
         genre: genre,
-        subgenre: subgenre.trim() || undefined,
-        release_version: releaseVersion.trim() || undefined,
-        language: language.trim() || undefined,
-        original_release_date: originalReleaseDate || undefined,
-        featured_artists: featuredArtists.split(',').map((name) => name.trim()).filter(Boolean),
-        label_name: selfReleased ? undefined : labelName.trim() || undefined,
-        self_released: selfReleased,
-        copyright_c: copyrightC.trim() || undefined,
-        copyright_p: copyrightP.trim() || undefined,
-        notes: releaseNotes.trim() || undefined,
         distribution_rights_confirmed: rightsConfirmed,
         release_date: releaseDate,
         artwork_url: coverUrl || '',
         cover_artwork_url: coverUrl || '',
-        tracks: audioName ? [{
-          title: trackTitle.trim() || title.trim(),
+        tracks: audioName || composers.trim() || producers.trim() ? [{
+          title: title.trim(),
           audio_url: audioUrl || '',
           isrc: isrc.trim() || undefined,
-          track_version: trackVersion.trim() || undefined,
           primary_artist: artistName.trim() || undefined,
-          featured_artists: trackFeaturedArtists.split(',').map((name) => name.trim()).filter(Boolean),
           composers: composers.split(',').map((name) => name.trim()).filter(Boolean),
-          songwriters: songwriters.split(',').map((name) => name.trim()).filter(Boolean),
           producers: producers.split(',').map((name) => name.trim()).filter(Boolean),
-          arrangers: arrangers.split(',').map((name) => name.trim()).filter(Boolean),
-          explicit_content: explicitContent,
-          rights_ownership: rightsOwnership.trim() || undefined,
           distribution_rights_confirmed: rightsConfirmed,
-          track_number: trackNumber,
-          disc_number: discNumber,
         }] : [],
       };
 
@@ -531,36 +475,18 @@ export default function ReleasesPage() {
           release_type: releaseType,
           primary_artist_id: finalArtistId || undefined,
           genre: genre,
-          subgenre: subgenre.trim() || undefined,
-          release_version: releaseVersion.trim() || undefined,
-          language: language.trim() || undefined,
-          original_release_date: originalReleaseDate || undefined,
-          featured_artists: featuredArtists.split(',').map((name) => name.trim()).filter(Boolean),
-          label_name: selfReleased ? undefined : labelName.trim() || undefined,
-          self_released: selfReleased,
-          copyright_c: copyrightC.trim() || undefined,
-          copyright_p: copyrightP.trim() || undefined,
-          notes: releaseNotes.trim() || undefined,
           distribution_rights_confirmed: rightsConfirmed,
           release_date: releaseDate,
           artwork_url: coverUrl,
           cover_artwork_url: coverUrl,
           tracks: [{
-            title: trackTitle.trim() || title.trim(),
+            title: title.trim(),
             audio_url: audioUrl,
             isrc: suppliedIsrc,
-            track_version: trackVersion.trim() || undefined,
             primary_artist: artistName.trim() || undefined,
-            featured_artists: trackFeaturedArtists.split(',').map((name) => name.trim()).filter(Boolean),
             composers: composers.split(',').map((name) => name.trim()).filter(Boolean),
-            songwriters: songwriters.split(',').map((name) => name.trim()).filter(Boolean),
             producers: producers.split(',').map((name) => name.trim()).filter(Boolean),
-            arrangers: arrangers.split(',').map((name) => name.trim()).filter(Boolean),
-            explicit_content: explicitContent,
-            rights_ownership: rightsOwnership.trim() || undefined,
             distribution_rights_confirmed: rightsConfirmed,
-            track_number: trackNumber,
-            disc_number: discNumber,
           }],
         });
 
@@ -572,34 +498,16 @@ export default function ReleasesPage() {
         await updateRelease(targetReleaseId, {
           title: title.trim(),
           genre: genre,
-          subgenre: subgenre.trim() || undefined,
-          release_version: releaseVersion.trim() || undefined,
-          language: language.trim() || undefined,
-          original_release_date: originalReleaseDate || undefined,
-          featured_artists: featuredArtists.split(',').map((name) => name.trim()).filter(Boolean),
-          label_name: selfReleased ? undefined : labelName.trim() || undefined,
-          self_released: selfReleased,
-          copyright_c: copyrightC.trim() || undefined,
-          copyright_p: copyrightP.trim() || undefined,
-          notes: releaseNotes.trim() || undefined,
           distribution_rights_confirmed: rightsConfirmed,
           artwork_url: coverUrl,
           tracks: [{
-            title: trackTitle.trim() || title.trim(),
+            title: title.trim(),
             audio_url: audioUrl,
             isrc: suppliedIsrc,
-            track_version: trackVersion.trim() || undefined,
             primary_artist: artistName.trim() || undefined,
-            featured_artists: trackFeaturedArtists.split(',').map((name) => name.trim()).filter(Boolean),
             composers: composers.split(',').map((name) => name.trim()).filter(Boolean),
-            songwriters: songwriters.split(',').map((name) => name.trim()).filter(Boolean),
             producers: producers.split(',').map((name) => name.trim()).filter(Boolean),
-            arrangers: arrangers.split(',').map((name) => name.trim()).filter(Boolean),
-            explicit_content: explicitContent,
-            rights_ownership: rightsOwnership.trim() || undefined,
             distribution_rights_confirmed: rightsConfirmed,
-            track_number: trackNumber,
-            disc_number: discNumber,
           }],
         });
       }
@@ -630,29 +538,10 @@ export default function ReleasesPage() {
     setTitle(rel.title);
     setReleaseType((rel.release_type as any) || 'single');
     setGenre(rel.genre || 'Pop');
-    setSubgenre(rel.subgenre || '');
-    setReleaseVersion(rel.release_version || '');
-    setLanguage(rel.language || '');
-    setOriginalReleaseDate(rel.original_release_date || '');
-    setFeaturedArtists((rel.featured_artists || []).join(', '));
-    setLabelName(rel.label_name || '');
-    setSelfReleased(rel.self_released ?? !rel.label_name);
-    setCopyrightC(rel.copyright_c || '');
-    setCopyrightP(rel.copyright_p || '');
-    setReleaseNotes(rel.notes || '');
     setRightsConfirmed(rel.distribution_rights_confirmed === true);
     const track = rel.tracks?.[0];
-    setTrackTitle(track?.title || '');
-    setTrackVersion(track?.track_version || '');
-    setTrackNumber(track?.track_number || 1);
-    setDiscNumber(track?.disc_number || 1);
     setComposers((track?.composers || []).join(', '));
-    setSongwriters((track?.songwriters || []).join(', '));
     setProducers((track?.producers || []).join(', '));
-    setArrangers((track?.arrangers || []).join(', '));
-    setTrackFeaturedArtists((track?.featured_artists || []).join(', '));
-    setExplicitContent(track?.explicit_content === true);
-    setRightsOwnership(track?.rights_ownership || '');
     setReleaseDate(rel.release_date || new Date().toISOString().split('T')[0]);
     if (rel.cover_url) {
       setCoverUrl(rel.cover_url);
@@ -1053,39 +942,34 @@ export default function ReleasesPage() {
                 </div>
               </div>
 
-              <div className="space-y-4 bg-[#121218] border border-white/[0.06] p-4 rounded-2xl">
-                <h3 className="font-bold text-gray-200">Metadata Rilis &amp; Hak</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <input aria-label="Subgenre" placeholder="Subgenre (opsional)" value={subgenre} onChange={(e) => setSubgenre(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Versi rilis" placeholder="Versi rilis (opsional)" value={releaseVersion} onChange={(e) => setReleaseVersion(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Bahasa" placeholder="Bahasa utama (opsional)" value={language} onChange={(e) => setLanguage(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Tanggal rilis original" type="date" value={originalReleaseDate} onChange={(e) => setOriginalReleaseDate(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Featured artist rilis" placeholder="Featured artist (pisahkan koma)" value={featuredArtists} onChange={(e) => setFeaturedArtists(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Label" placeholder="Nama label (jika bukan self-released)" value={labelName} onChange={(e) => setLabelName(e.target.value)} disabled={selfReleased} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white disabled:opacity-50" />
-                  <input aria-label="Copyright C" placeholder="Copyright C (opsional)" value={copyrightC} onChange={(e) => setCopyrightC(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Copyright P" placeholder="Copyright P (opsional)" value={copyrightP} onChange={(e) => setCopyrightP(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-gray-300" htmlFor="release-composers">Composer (opsional)</label>
+                  <input
+                    id="release-composers"
+                    type="text"
+                    placeholder="Pisahkan beberapa nama dengan koma"
+                    value={composers}
+                    onChange={(e) => setComposers(e.target.value)}
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                  />
                 </div>
-                <label className="flex items-center gap-2 text-gray-300"><input type="checkbox" checked={selfReleased} onChange={(e) => setSelfReleased(e.target.checked)} /> Self-released</label>
-                <textarea aria-label="Catatan rilis" rows={2} placeholder="Catatan tambahan (opsional)" value={releaseNotes} onChange={(e) => setReleaseNotes(e.target.value)} className="w-full bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-              </div>
-
-              <div className="space-y-4 bg-[#121218] border border-white/[0.06] p-4 rounded-2xl">
-                <h3 className="font-bold text-gray-200">Metadata Track</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <input aria-label="Judul track" placeholder="Judul track" value={trackTitle} onChange={(e) => setTrackTitle(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Versi track" placeholder="Versi track (opsional)" value={trackVersion} onChange={(e) => setTrackVersion(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Composer" placeholder="Composer(s), pisahkan koma" value={composers} onChange={(e) => setComposers(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Songwriter" placeholder="Songwriter / lyricist(s)" value={songwriters} onChange={(e) => setSongwriters(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Producer" placeholder="Producer(s), pisahkan koma" value={producers} onChange={(e) => setProducers(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Arranger" placeholder="Arranger(s), pisahkan koma" value={arrangers} onChange={(e) => setArrangers(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Featured artists track" placeholder="Featured artist(s) track" value={trackFeaturedArtists} onChange={(e) => setTrackFeaturedArtists(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <input aria-label="Hak track" placeholder="Pemilik hak track (opsional)" value={rightsOwnership} onChange={(e) => setRightsOwnership(e.target.value)} className="bg-[#161622] border border-white/[0.08] rounded-xl px-3 py-2 text-white" />
-                  <label className="flex items-center gap-2 text-gray-300">Track no. <input type="number" min={1} value={trackNumber} onChange={(e) => setTrackNumber(Number(e.target.value))} className="w-20 bg-[#161622] border border-white/[0.08] rounded-lg px-2 py-1 text-white" /></label>
-                  <label className="flex items-center gap-2 text-gray-300">Disc no. <input type="number" min={1} value={discNumber} onChange={(e) => setDiscNumber(Number(e.target.value))} className="w-20 bg-[#161622] border border-white/[0.08] rounded-lg px-2 py-1 text-white" /></label>
+                <div className="space-y-1.5">
+                  <label className="font-bold text-gray-300" htmlFor="release-producers">Producer (opsional)</label>
+                  <input
+                    id="release-producers"
+                    type="text"
+                    placeholder="Pisahkan beberapa nama dengan koma"
+                    value={producers}
+                    onChange={(e) => setProducers(e.target.value)}
+                    className="w-full bg-[#121218] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-indigo-500"
+                  />
                 </div>
-                <label className="flex items-center gap-2 text-gray-300"><input type="checkbox" checked={explicitContent} onChange={(e) => setExplicitContent(e.target.checked)} /> Konten eksplisit</label>
-                <label className="flex items-start gap-2 text-gray-300 text-[11px]"><input type="checkbox" checked={rightsConfirmed} onChange={(e) => setRightsConfirmed(e.target.checked)} /> Saya memiliki atau berwenang mengelola hak distribusi untuk audio, komposisi, dan artwork yang diajukan.</label>
               </div>
+              <label className="flex items-start gap-2 text-gray-300 text-[11px]">
+                <input type="checkbox" checked={rightsConfirmed} onChange={(e) => setRightsConfirmed(e.target.checked)} />
+                Saya memiliki atau berwenang mengelola hak distribusi untuk audio, komposisi, dan artwork yang diajukan.
+              </label>
 
               {/* Row 4: TikTok Audio Clip / Social Preview Start Time */}
               <div className="bg-[#121218] border border-white/[0.06] p-4 rounded-2xl space-y-3">

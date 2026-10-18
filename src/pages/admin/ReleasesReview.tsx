@@ -298,24 +298,14 @@ export default function ReleasesReview() {
                     )}
                   </div>
                   <div className="mt-2 text-[10px] text-gray-500 space-y-1">
-                    <div>
-                      {item.language && <span>Bahasa: {item.language} · </span>}
-                      {item.subgenre && <span>Subgenre: {item.subgenre} · </span>}
-                      {item.release_version && <span>Versi: {item.release_version} · </span>}
-                      {item.upc && <span>UPC: {item.upc}</span>}
-                    </div>
-                    {item.featured_artists?.length ? <div>Featured: {item.featured_artists.join(', ')}</div> : null}
                     {item.tracks?.map((track, index) => (
                       <div key={track.id || index} className="text-gray-400">
                         Track {track.track_number || index + 1}: {track.title}
                         {track.isrc ? ` · ISRC ${track.isrc}` : ''}
                         {track.composers?.length ? ` · Composer ${track.composers.join(', ')}` : ''}
-                        {track.songwriters?.length ? ` · Songwriter ${track.songwriters.join(', ')}` : ''}
                         {track.producers?.length ? ` · Producer ${track.producers.join(', ')}` : ''}
-                        {track.arrangers?.length ? ` · Arranger ${track.arrangers.join(', ')}` : ''}
                       </div>
                     ))}
-                    {(item.copyright_c || item.copyright_p) && <div>{item.copyright_c || ''}{item.copyright_c && item.copyright_p ? ' · ' : ''}{item.copyright_p || ''}</div>}
                   </div>
                 </div>
               </div>
