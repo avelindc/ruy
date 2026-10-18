@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { getRoyaltyEntries, getRoyaltyCalculationItems } from '@services/royaltiesService';
 import { getWithdrawalRequests, type WithdrawalRecord } from '@services/withdrawalService';
+import { getUserReleases } from '@services/releaseService';
 import { useAuth } from '@contexts/AuthContext';
 
 // Platform theme colors
@@ -77,6 +78,8 @@ export interface DisplayRoyaltyRow {
   platforms_list: string[];
   streams: number;
   royalty_usd: number;
+  currency?: string;
+  amount?: number;
   period: string; // e.g. "Aug 2026" or "2026-08"
   period_raw: string;
   status: 'paid' | 'processing' | 'finalized';
@@ -94,6 +97,7 @@ export default function RoyaltiesPage() {
   // Raw Application Data
   const [records, setRecords] = useState<DisplayRoyaltyRow[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
+  const [catalogTracksCount, setCatalogTracksCount] = useState<number>(0);
 
   // Filters
   const [selectedDateRange, setSelectedDateRange] = useState('Semua Periode');
@@ -122,23 +126,32 @@ export default function RoyaltiesPage() {
       if (!user?.id) {
         setRecords([]);
         setWithdrawals([]);
+        setCatalogTracksCount(0);
         return;
       }
-      const [royaltyResult, calculationResult, withdrawalResult] = await Promise.all([
+      const [royaltyResult, calculationResult, withdrawalResult, releasesResult] = await Promise.all([
         getRoyaltyEntries(user.id),
         getRoyaltyCalculationItems(user.id),
         getWithdrawalRequests(user.id),
+        getUserReleases(user.id),
       ]);
       if (royaltyResult.error) throw royaltyResult.error;
       if (calculationResult.error) throw calculationResult.error;
       if (withdrawalResult.error) throw withdrawalResult.error;
       setWithdrawals(withdrawalResult.data);
-      const calculationRows = (calculationResult.data || []).map((entry: any) => {
+
+      const releases = releasesResult.data || [];
+      const totalCatalogTracks = releases.reduce((sum: number, rel: any) => sum + (rel.tracks?.length || 1), 0);
+      setCatalogTracksCount(totalCatalogTracks);
+
+      const calculationRows: DisplayRoyaltyRow[] = (calculationResult.data || []).map((entry: any) => {
         const periodRaw = String(entry.period_start || '').slice(0, 7);
         const [year, month] = periodRaw.split('-');
         const periodDisplay = month && MONTH_SHORT[month] ? `${MONTH_SHORT[month]} ${year}` : periodRaw;
         const title = entry.track_title || '';
         const platform = String(entry.platform || '').replace(/_/g, ' ').replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+        const isUsd = (entry.currency || 'USD').toUpperCase() === 'USD';
+        const numAmount = Number(entry.amount || 0);
         return {
           id: entry.id,
           track_title: title,
@@ -149,18 +162,24 @@ export default function RoyaltiesPage() {
           platform,
           platforms_list: [platform],
           streams: Number(entry.streams || 0),
-          royalty_usd: entry.currency === 'USD' ? Number(entry.amount || 0) : 0,
+          royalty_usd: isUsd ? numAmount : 0,
+          currency: entry.currency || 'USD',
+          amount: numAmount,
           period: periodDisplay,
           period_raw: periodRaw,
           status: 'finalized' as const,
           cover_url: '',
         };
       });
-      const legacyRows = (royaltyResult.data || []).map((entry: any) => {
+
+      const legacyRows: DisplayRoyaltyRow[] = (royaltyResult.data || []).map((entry: any) => {
         const periodRaw = String(entry.reporting_period || '');
         const [year, month] = periodRaw.split('-');
         const periodDisplay = month && MONTH_SHORT[month] ? `${MONTH_SHORT[month]} ${year}` : periodRaw;
         const title = entry.song_name || entry.track?.title || '';
+        const numAmount = Number(entry.amount || entry.net_revenue || 0);
+        const curr = (entry.currency || 'USD').toUpperCase();
+        const isUsd = curr === 'USD';
         return {
           id: entry.id,
           track_title: title,
@@ -171,18 +190,21 @@ export default function RoyaltiesPage() {
           platform: entry.source === 'manual_artist_royalty' ? 'Royalti Artis' : 'Royalty agregat',
           platforms_list: [],
           streams: Number(entry.streams || 0),
-          royalty_usd: Number(entry.amount || 0),
+          royalty_usd: isUsd ? numAmount : 0,
+          currency: curr,
+          amount: numAmount,
           period: periodDisplay,
           period_raw: periodRaw,
           status: entry.status === 'paid' ? 'paid' : entry.status === 'finalized' ? 'finalized' : 'processing',
           cover_url: '',
         };
       });
+
       const manualArtistRows = legacyRows.filter((row: any) => row.platform === 'Royalti Artis');
       setRecords(calculationRows.length ? [...calculationRows, ...manualArtistRows] : legacyRows);
     } catch (err) {
       console.error('Error loading royalty reports:', err);
-      setErrorMessage('Gagal memuat laporan royalti. Silakan periksa koneksi atau coba lagi nanti.');
+      setErrorMessage(err instanceof Error ? err.message : 'Gagal memuat laporan royalti.');
     } finally {
       setLoading(false);
     }
@@ -234,31 +256,64 @@ export default function RoyaltiesPage() {
   // Derived Genuine Metrics
   const metrics = useMemo(() => {
     const list = headerFilteredRecords;
-    const totalRoyaltyUsd = list.reduce((sum, r) => sum + (r.royalty_usd || 0), 0);
 
-    // Distinct tracks with qualifying royalties
+    // Only finalized or paid royalties count toward total finalized royalty
+    const finalizedList = list.filter((r) => r.status === 'finalized' || r.status === 'paid');
+    const totalRoyaltyUsd = finalizedList
+      .filter((r) => (r.currency || 'USD') === 'USD')
+      .reduce((sum, r) => sum + (r.royalty_usd || 0), 0);
+    const totalRoyaltyIdr = finalizedList
+      .filter((r) => r.currency === 'IDR')
+      .reduce((sum, r) => sum + (r.amount || r.royalty_usd || 0), 0);
+
+    let totalRoyaltyFormatted = '$0.00';
+    if (totalRoyaltyIdr > 0 && totalRoyaltyUsd > 0) {
+      totalRoyaltyFormatted = `${new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(totalRoyaltyIdr)} / $${totalRoyaltyUsd.toFixed(2)}`;
+    } else if (totalRoyaltyIdr > 0) {
+      totalRoyaltyFormatted = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(totalRoyaltyIdr);
+    } else {
+      totalRoyaltyFormatted = `$${totalRoyaltyUsd.toFixed(2)}`;
+    }
+
+    // Distinct tracks with qualifying royalties or catalog tracks
     const distinctTracks = new Set(
-      list.filter(r => r.royalty_usd > 0 || r.streams > 0).map(r => r.track_title.trim().toLowerCase())
+      list.filter((r) => r.royalty_usd > 0 || (r.amount || 0) > 0 || r.streams > 0).map((r) => r.track_title.trim().toLowerCase())
     );
 
     // Distinct platforms
     const distinctPlatforms = new Set(
-      list.map(r => r.platform.trim())
+      list.map((r) => r.platform.trim()).filter(Boolean)
     );
 
     // Verified completed/paid disbursements
-    const paidWithdrawals = withdrawals.filter(w => w.status === 'paid' && w.currency === 'USD');
-    const verifiedPaymentUsd = paidWithdrawals.reduce((sum, w) => sum + w.amount, 0);
+    const paidWithdrawals = withdrawals.filter((w) => w.status === 'paid');
+    const verifiedPaymentUsd = paidWithdrawals.filter((w) => (w.currency || 'USD') === 'USD').reduce((sum, w) => sum + w.amount, 0);
+    const verifiedPaymentIdr = paidWithdrawals.filter((w) => w.currency === 'IDR').reduce((sum, w) => sum + w.amount, 0);
+
+    let verifiedPaymentFormatted = '$0.00';
+    if (verifiedPaymentIdr > 0 && verifiedPaymentUsd > 0) {
+      verifiedPaymentFormatted = `${new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(verifiedPaymentIdr)} / $${verifiedPaymentUsd.toFixed(2)}`;
+    } else if (verifiedPaymentIdr > 0) {
+      verifiedPaymentFormatted = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(verifiedPaymentIdr);
+    } else {
+      verifiedPaymentFormatted = `$${verifiedPaymentUsd.toFixed(2)}`;
+    }
+
     const paymentTransactionsCount = paidWithdrawals.length;
 
     return {
       totalRoyaltyUsd,
-      trackCount: distinctTracks.size,
+      totalRoyaltyIdr,
+      totalRoyaltyFormatted,
+      trackCount: Math.max(catalogTracksCount, distinctTracks.size),
       platformCount: distinctPlatforms.size,
       verifiedPaymentUsd,
+      verifiedPaymentIdr,
+      verifiedPaymentFormatted,
       paymentTransactionsCount,
+      hasFinalized: finalizedList.length > 0,
     };
-  }, [headerFilteredRecords, withdrawals]);
+  }, [headerFilteredRecords, withdrawals, catalogTracksCount]);
 
   // Royalty Trend Chart Data (Real Aggregation by Period)
   const trendData = useMemo<Array<{ month: string; label: string; royalty: number; streams: number }>>(() => {
@@ -568,21 +623,21 @@ export default function RoyaltiesPage() {
          ========================================================================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
 
-        {/* Card 1: Total Royalti */}
+        {/* Card 1: Total Royalti Difinalisasi */}
         <div className="bg-[#1c1d23] border border-white/[0.04] rounded-[24px] p-5 sm:p-6 shadow-xl flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-purple-500/20 text-[#A855F7] border border-purple-500/30 flex items-center justify-center flex-shrink-0 shadow-md">
             <Wallet className="w-5 h-5" />
           </div>
           <div className="min-w-0">
-            <span className="text-xs text-[#8E92A0] font-medium block">Total Royalti</span>
+            <span className="text-xs text-[#8E92A0] font-medium block">Total Royalti Difinalisasi</span>
             <div className="text-2xl font-black text-white tracking-tight mt-0.5">
-              ${Number(metrics.totalRoyaltyUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {metrics.totalRoyaltyFormatted}
             </div>
             <div className="flex items-center gap-1.5 text-[11px] font-medium mt-1">
-              {metrics.totalRoyaltyUsd > 0 ? (
-                <span className="text-gray-500 text-[10px]">dari data royalti tersimpan</span>
+              {metrics.hasFinalized ? (
+                <span className="text-emerald-400 text-[10px]">Telah dikreditkan ke saldo</span>
               ) : (
-                <span className="text-gray-500 text-[10px]">Belum ada royalti dilaporkan</span>
+                <span className="text-gray-500 text-[10px]">Belum ada royalti difinalisasi</span>
               )}
             </div>
           </div>
@@ -600,9 +655,9 @@ export default function RoyaltiesPage() {
             </div>
             <div className="flex items-center gap-1.5 text-[11px] font-medium mt-1">
               {metrics.trackCount > 0 ? (
-                <span className="text-emerald-400 text-[10px]">track dengan royalti</span>
+                <span className="text-emerald-400 text-[10px]">track di katalog</span>
               ) : (
-                <span className="text-gray-500 text-[10px]">Belum ada track terdistribusi</span>
+                <span className="text-gray-500 text-[10px]">Belum ada track di katalog</span>
               )}
             </div>
           </div>
@@ -640,11 +695,11 @@ export default function RoyaltiesPage() {
             <div className="min-w-0">
               <span className="text-xs text-[#8E92A0] font-medium block">Pembayaran Diterima</span>
               <div className="text-2xl font-black text-white tracking-tight mt-0.5">
-                ${Number(metrics.verifiedPaymentUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {metrics.verifiedPaymentFormatted}
               </div>
               <span className="text-[11px] text-gray-500 block mt-1">
                 {metrics.paymentTransactionsCount > 0
-                  ? `Dari ${metrics.paymentTransactionsCount} pembayaran`
+                  ? `Dari ${metrics.paymentTransactionsCount} pencairan selesai`
                   : 'Belum ada transaksi cair'}
               </span>
             </div>
@@ -1072,7 +1127,9 @@ export default function RoyaltiesPage() {
                       {/* Royalti */}
                       <td className="py-3.5 px-4 font-mono font-bold text-white text-right whitespace-nowrap">
                         <div className="text-white">
-                          ${Number(row.royalty_usd || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {row.currency === 'IDR'
+                            ? `Rp ${Number(row.amount || row.royalty_usd || 0).toLocaleString('id-ID')}`
+                            : `$${Number(row.royalty_usd || row.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                         </div>
                       </td>
 

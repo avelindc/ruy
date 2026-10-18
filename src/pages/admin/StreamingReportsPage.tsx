@@ -22,26 +22,57 @@ export default function StreamingReportsPage() {
   const [selectedPlatform, setSelectedPlatform] = useState<'All' | 'Spotify' | 'YouTube' | 'Apple Music'>('All');
 
   // Player state
+  const [catalogReleases, setCatalogReleases] = useState<any[]>([]);
   const [isPlayingFeatured, setIsPlayingFeatured] = useState(false);
   const [playerProgress, setPlayerProgress] = useState(0);
 
   const loadData = async () => {
     try {
       setLoadError('');
-      const res = await apiGet<any>('/api/streaming?limit=500');
-      const apiList: StreamingRecordItem[] = (res.data?.data || []).map((r: any) => ({
-          id: r.id,
-          user_id: r.owner_id,
-          artist_name: r.artist_name || '',
-          track_title: r.track_title || '',
-          platform: r.platform || '',
-          period: r.reporting_period || '',
-          streams: Number(r.streams || 0),
-          royalty_usd: r.currency === 'USD' ? Number(r.revenue || 0) : 0,
-          currency: r.currency,
-          created_at: r.created_at,
-        }));
-      setRecords(apiList);
+      const [streamingRes, manualRes, releasesRes] = await Promise.allSettled([
+        apiGet<any>('/api/streaming?limit=500'),
+        apiGet<any>('/api/admin/artist-finance/streaming?limit=500'),
+        apiGet<any>('/api/releases?limit=100'),
+      ]);
+
+      const apiList: StreamingRecordItem[] = streamingRes.status === 'fulfilled'
+        ? (streamingRes.value.data?.data || []).map((r: any) => ({
+            id: r.id,
+            user_id: r.owner_id,
+            artist_name: r.artist_name || '',
+            track_title: r.track_title || '',
+            platform: r.platform || '',
+            period: r.reporting_period || '',
+            streams: Number(r.streams || 0),
+            royalty_usd: r.currency === 'USD' ? Number(r.revenue || 0) : 0,
+            currency: r.currency,
+            created_at: r.created_at,
+            is_manual: false,
+          }))
+        : [];
+
+      const manualList: StreamingRecordItem[] = manualRes.status === 'fulfilled'
+        ? (manualRes.value.data?.data || []).map((m: any) => ({
+            id: m.id,
+            user_id: m.owner_id,
+            artist_name: m.artist_name || '',
+            track_title: m.artist_name || '',
+            platform: m.platform || 'Agregat',
+            period: m.period_start || '',
+            streams: Number(m.streams || 0),
+            royalty_usd: m.gross_revenue ? Number(m.gross_revenue) : 0,
+            currency: m.currency || 'USD',
+            created_at: m.created_at,
+            is_manual: true,
+          }))
+        : [];
+
+      const releases = releasesRes.status === 'fulfilled'
+        ? (releasesRes.value.data?.data || releasesRes.value.data || [])
+        : [];
+
+      setCatalogReleases(Array.isArray(releases) ? releases : []);
+      setRecords([...apiList, ...manualList]);
     } catch (error) {
       setRecords([]);
       setLoadError(error instanceof Error ? error.message : 'Gagal memuat laporan streaming.');
@@ -52,8 +83,35 @@ export default function StreamingReportsPage() {
     void loadData();
   }, []);
 
-  // Track names shown here come only from imported streaming report rows.
+  // Top Releases combined from catalog releases and streaming play counts
   const realReleasesList = useMemo(() => {
+    if (catalogReleases.length > 0) {
+      return catalogReleases.map((release, index) => {
+        const releaseArtist = (release.primary_artist || release.artist_name || release.artist || '').trim().toLowerCase();
+        const releaseTitle = (release.title || '').trim().toLowerCase();
+
+        // Attribute streams matching artist or track title
+        const matchingStreams = records
+          .filter(
+            (r) =>
+              (r.artist_name && r.artist_name.trim().toLowerCase() === releaseArtist) ||
+              (r.track_title && r.track_title.trim().toLowerCase() === releaseTitle)
+          )
+          .reduce((sum, r) => sum + Number(r.streams || 0), 0);
+
+        return {
+          id: release.id,
+          rank: String(index + 1).padStart(2, '0'),
+          title: release.title || 'Untitled',
+          artist: release.primary_artist || release.artist_name || 'Artis',
+          plays: `${matchingStreams.toLocaleString()} streams`,
+          rawPlays: matchingStreams,
+          cover: release.cover_artwork_url || '',
+          isPlaying: false,
+        };
+      }).sort((a, b) => b.rawPlays - a.rawPlays);
+    }
+
     const list: Array<{
       id: string;
       rank: string;
@@ -71,7 +129,7 @@ export default function StreamingReportsPage() {
     });
 
     return list;
-  }, [records]);
+  }, [catalogReleases, records]);
 
   const leftColumnReleases = realReleasesList.slice(0, 4);
   const rightColumnReleases = realReleasesList.slice(4, 8);
@@ -106,13 +164,33 @@ export default function StreamingReportsPage() {
     }, 0);
   }, [records, selectedPlatform]);
 
-  // Streaming records describe reported DSP revenue, not a completed payout.
+  // Streaming records describe reported DSP revenue vs manual allocation.
   const earningsData = useMemo(() => {
-    const totalUsd = records.reduce((acc, r) => acc + (r.royalty_usd || 0), 0);
-    const rows = [{ label: 'DSP REPORTED', amount: Math.round(totalUsd), percentage: totalUsd > 0 ? 100 : 0, status: 'reported' }];
+    const dspRows = records.filter((r: any) => !r.is_manual);
+    const manualRows = records.filter((r: any) => r.is_manual);
+
+    const dspTotal = dspRows.reduce((acc, r) => acc + (r.royalty_usd || 0), 0);
+    const manualTotal = manualRows.reduce((acc, r) => acc + (r.royalty_usd || 0), 0);
+    const totalAll = dspTotal + manualTotal;
+
+    const rows = [
+      {
+        label: 'DSP REPORTED',
+        amount: Math.round(dspTotal),
+        percentage: totalAll > 0 ? Math.round((dspTotal / totalAll) * 100) : 0,
+        status: 'reported',
+      },
+      {
+        label: 'ALOKASI MANUAL',
+        amount: Math.round(manualTotal),
+        percentage: totalAll > 0 ? Math.round((manualTotal / totalAll) * 100) : 0,
+        status: 'cleared',
+      },
+    ];
 
     return {
-      total: totalUsd,
+      total: dspTotal,
+      totalCombined: totalAll,
       rows,
     };
   }, [records]);

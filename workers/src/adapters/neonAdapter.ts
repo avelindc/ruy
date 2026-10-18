@@ -187,19 +187,30 @@ export class NeonAdapter implements DatabaseAdapter {
   }
 
   async getAdminDashboardStats() {
-    const [users, releases, streams, royalties, reviews, withdrawals] = await Promise.all([
+    const [users, releases, dspStreams, manualStreams, dspRoyalties, manualRoyalties, reviews, withdrawals] = await Promise.all([
       this.client.query('SELECT COUNT(*)::int AS total FROM users WHERE account_status <> \'deleted\''),
       this.client.query('SELECT COUNT(*)::int AS total FROM "Release"'),
       this.client.query('SELECT COALESCE(SUM("playCount"), 0)::bigint AS total FROM "Streaming"'),
+      this.client.query('SELECT COALESCE(SUM(streams), 0)::bigint AS total FROM public."ArtistStreamingAggregate"'),
       this.client.query('SELECT COALESCE(SUM("totalRevenue"), 0)::numeric AS total FROM "Royalty"'),
+      this.client.query('SELECT COALESCE(SUM("netRoyalty"), 0)::numeric AS total FROM public."ManualArtistRoyalty" WHERE status = \'finalized\''),
       this.client.query('SELECT COUNT(*)::int AS total FROM "Release" WHERE status IN (\'REVIEW\', \'PENDING\')'),
       this.client.query('SELECT COUNT(*)::int AS total FROM "Withdrawal" WHERE status IN (\'pending\', \'PENDING\')'),
     ]);
+    const dspStreamTotal = Number(dspStreams.rows[0]?.total || 0);
+    const manualStreamTotal = Number(manualStreams.rows[0]?.total || 0);
+    const dspRevenueTotal = Number(dspRoyalties.rows[0]?.total || 0);
+    const manualRoyaltyTotal = Number(manualRoyalties.rows[0]?.total || 0);
+
     return {
       totalUsers: Number(users.rows[0]?.total || 0),
       totalReleases: Number(releases.rows[0]?.total || 0),
-      totalStreams: Number(streams.rows[0]?.total || 0),
-      totalRevenue: Number(royalties.rows[0]?.total || 0),
+      totalStreams: dspStreamTotal + manualStreamTotal,
+      dspStreams: dspStreamTotal,
+      manualStreams: manualStreamTotal,
+      totalRevenue: dspRevenueTotal + manualRoyaltyTotal,
+      dspReportedRevenue: dspRevenueTotal,
+      allocatedArtistRoyalty: manualRoyaltyTotal,
       pendingReviews: Number(reviews.rows[0]?.total || 0),
       pendingWithdrawals: Number(withdrawals.rows[0]?.total || 0),
     };
@@ -243,7 +254,7 @@ export class NeonAdapter implements DatabaseAdapter {
   // ========== ARTIST OPERATIONS ==========
 
   async getArtist(artistId: string): Promise<Artist | null> {
-    const query = 'SELECT * FROM "Artist" WHERE id = $1';
+    const query = 'SELECT * FROM "Artist" WHERE id = $1 OR "userId" = $1 ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END LIMIT 1';
     const result = await this.client.query(query, [artistId]);
     return result.rows.length > 0 ? transformNeonArtist(result.rows[0]) : null;
   }
@@ -919,7 +930,10 @@ export class NeonAdapter implements DatabaseAdapter {
       conditions.push(`${column} = $${params.length}`);
     };
     if (filters.owner_id) add('a."userId"', filters.owner_id);
-    if (filters.artist_id) add('a.id', filters.artist_id);
+    if (filters.artist_id) {
+      params.push(filters.artist_id);
+      conditions.push(`(a.id = $${params.length} OR a."userId" = $${params.length})`);
+    }
     if (filters.release_id) add('r.id', filters.release_id);
     if (filters.track_id) add('t.id', filters.track_id);
     if (filters.platform) add('s.platform', filters.platform);

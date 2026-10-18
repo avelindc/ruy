@@ -50,21 +50,34 @@ export default function AdminOverview() {
     try {
       setLoading(true);
 
-      const [statsRes, withdrawalsRes, streamingRes] = await Promise.allSettled([
+      const [statsRes, withdrawalsRes, streamingRes, manualStreamingRes] = await Promise.allSettled([
         getAdminStats(),
         getAdminWithdrawalRequests(),
         apiGet<any>('/api/streaming?limit=500'),
+        apiGet<any>('/api/admin/artist-finance/streaming?limit=500'),
       ]);
 
       const apiWithdrawals: WithdrawalRecord[] = withdrawalsRes.status === 'fulfilled' ? withdrawalsRes.value.data : [];
       setWithdrawals(apiWithdrawals);
       const apiStreaming = streamingRes.status === 'fulfilled' ? (streamingRes.value.data?.data || []) : [];
-      setStreamingRecords(apiStreaming);
-      const totalRoyaltyUsd = Number(statsRes.status === 'fulfilled' ? statsRes.value.data?.totalRevenue : 0) || 0;
+      const manualStreaming = manualStreamingRes.status === 'fulfilled' ? (manualStreamingRes.value.data?.data || []) : [];
+      const normalizedManual = manualStreaming.map((m: any) => ({
+        id: m.id,
+        platform: m.platform,
+        reporting_period: m.period_start,
+        streams: Number(m.streams || 0),
+        revenue: m.gross_revenue ? Number(m.gross_revenue) : 0,
+        currency: m.currency || 'USD',
+        artist_name: m.artist_name,
+        is_manual: true,
+      }));
+      setStreamingRecords([...apiStreaming, ...normalizedManual]);
+      const statsData = statsRes.status === 'fulfilled' ? statsRes.value.data : null;
+      const totalRoyaltyUsd = Number(statsData?.totalRevenue || 0);
       const withdrawnUsd = apiWithdrawals.filter((item: WithdrawalRecord) => item.status === 'paid').reduce((sum: number, item: WithdrawalRecord) => sum + item.amount, 0);
       const reservedUsd = apiWithdrawals.filter((item: WithdrawalRecord) => ['pending', 'under_review', 'approved', 'processing', 'paid'].includes(item.status)).reduce((sum: number, item: WithdrawalRecord) => sum + item.amount, 0);
       setRoyaltyTotals({
-        totalStreams: Number(statsRes.status === 'fulfilled' ? statsRes.value.data?.totalStreams : 0) || 0,
+        totalStreams: Number(statsData?.totalStreams || 0),
         totalRoyaltyUsd,
         withdrawnUsd,
         availableUsd: Math.max(0, totalRoyaltyUsd - reservedUsd),
@@ -104,21 +117,29 @@ export default function AdminOverview() {
 
   // Real Platform Breakdown for Right Panel
   const platformBreakdown = useMemo(() => {
-    const map: Record<string, number> = {};
+    const map: Record<string, { revenue: number; streams: number }> = {};
     streamingRecords.forEach(s => {
-      const p = s.platform;
-      if (p) map[p] = (map[p] || 0) + Number(s.revenue || 0);
+      const p = s.platform || 'Lainnya';
+      if (!map[p]) map[p] = { revenue: 0, streams: 0 };
+      map[p].revenue += Number(s.revenue || 0);
+      map[p].streams += Number(s.streams || 0);
     });
 
     const entries = Object.entries(map);
-    const total = entries.reduce((sum, [, v]) => sum + v, 0);
+    const totalRev = entries.reduce((sum, [, v]) => sum + v.revenue, 0);
+    const totalStreams = entries.reduce((sum, [, v]) => sum + v.streams, 0);
 
-    return entries.map(([name, val]) => ({
+    return entries.map(([name, data]) => ({
       name,
-      amount: val,
-      percentage: total > 0 ? Math.round((val / total) * 100) : 0,
+      amount: data.revenue,
+      streams: data.streams,
+      percentage: totalRev > 0
+        ? Math.round((data.revenue / totalRev) * 100)
+        : totalStreams > 0
+          ? Math.round((data.streams / totalStreams) * 100)
+          : 0,
       color: PLATFORM_COLORS[name] || '#A855F7',
-    })).sort((a, b) => b.amount - a.amount);
+    })).sort((a, b) => (b.amount !== a.amount ? b.amount - a.amount : b.streams - a.streams));
   }, [streamingRecords]);
 
   // Real Disbursement Percentage for Progress Ring
@@ -535,16 +556,16 @@ export default function AdminOverview() {
               </div>
             </div>
 
-            {/* BOTTOM: Breakdown by Real DSP Platform */}
+            {/* BOTTOM: Breakdown by Real Platform */}
             <div className="space-y-3.5 pt-1">
               {platformBreakdown.length === 0 ? (
                 <div className="text-center py-4 px-2 space-y-2">
-                  <p className="text-xs text-gray-400 font-medium">Belum ada laporan DSP terimpor</p>
+                  <p className="text-xs text-gray-400 font-medium">Belum ada data streaming tercatat</p>
                   <button
-                    onClick={() => navigate('/admin/csv-import')}
+                    onClick={() => navigate('/admin/streaming-royalty')}
                     className="px-3.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 text-xs font-semibold transition-colors cursor-pointer"
                   >
-                    + Impor Laporan DSP
+                    + Input Streaming &amp; Royalti
                   </button>
                 </div>
               ) : (
@@ -558,7 +579,9 @@ export default function AdminOverview() {
                       <span className="text-gray-300 font-medium truncate max-w-[130px]">{item.name}</span>
                     </div>
                     <div className="text-right">
-                      <span className="font-bold text-gray-200">${item.amount.toFixed(2)}</span>
+                      <span className="font-bold text-gray-200">
+                        {item.amount > 0 ? `$${item.amount.toFixed(2)}` : `${item.streams.toLocaleString()} plays`}
+                      </span>
                       <span className="text-[10px] text-gray-500 ml-1.5 font-medium">{item.percentage}%</span>
                     </div>
                   </div>

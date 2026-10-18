@@ -682,3 +682,115 @@ test('15. Aggregate streaming mode does not require platform name and defaults t
   assert.equal(capturedInput.input.platform, 'Agregat');
   assert.equal(capturedInput.input.streams, 250000);
 });
+
+// 16. Admin dashboard stats includes both DSP and manual artist finance data
+test('16. Admin dashboard stats combines DSP and manual streaming and royalties accurately', async () => {
+  const executedQueries = [];
+  const fakeClient = {
+    async query(sql) {
+      executedQueries.push(sql);
+      if (sql.includes('public."ArtistStreamingAggregate"')) {
+        return { rows: [{ total: '50000' }] };
+      }
+      if (sql.includes('FROM "Streaming"')) {
+        return { rows: [{ total: '150000' }] };
+      }
+      if (sql.includes('public."ManualArtistRoyalty"')) {
+        return { rows: [{ total: '70000.00' }] };
+      }
+      if (sql.includes('FROM "Royalty"')) {
+        return { rows: [{ total: '30000.00' }] };
+      }
+      if (sql.includes('FROM users')) {
+        return { rows: [{ total: '10' }] };
+      }
+      if (sql.includes('FROM "Release"')) {
+        return { rows: [{ total: '5' }] };
+      }
+      if (sql.includes('FROM "Withdrawal"')) {
+        return { rows: [{ total: '1' }] };
+      }
+      return { rows: [{ total: '0' }] };
+    },
+  };
+
+  const adapter = new NeonAdapter('postgresql://test:test@ep-fake.neon.tech/neondb?sslmode=require');
+  adapter.client = fakeClient;
+
+  const stats = await adapter.getAdminDashboardStats();
+  assert.equal(stats.totalStreams, 200000); // 150000 DSP + 50000 manual
+  assert.equal(stats.dspStreams, 150000);
+  assert.equal(stats.manualStreams, 50000);
+  assert.equal(stats.totalRevenue, 100000); // 30000 DSP + 70000 manual
+  assert.equal(stats.dspReportedRevenue, 30000);
+  assert.equal(stats.allocatedArtistRoyalty, 70000);
+});
+
+// 17. Artist royalty endpoint returns royalty history while draft entries are marked estimated
+test('17. Artist royalty endpoint returns manual royalties with correct status without leaking other accounts', async () => {
+  const adapter = {
+    ...baseSessionAdapter(),
+    async listArtists(ownerId) {
+      if (ownerId === artistOwnerId) {
+        return { data: [{ id: artistId, owner_id: artistOwnerId, stageName: 'Asep' }], total: 1 };
+      }
+      return { data: [], total: 0 };
+    },
+    async getRoyalties() {
+      return { data: [], total: 0 };
+    },
+    async listManualArtistRoyalties(filters) {
+      assert.equal(filters.owner_id, artistOwnerId);
+      return {
+        data: [
+          {
+            id: 'roy-1',
+            artist_id: artistId,
+            owner_id: artistOwnerId,
+            artist_name: 'Asep',
+            period_start: '2026-08-01',
+            period_end: '2026-08-31',
+            streams: 10000,
+            gross_revenue: '100000.00',
+            deductions: '30000.00',
+            net_royalty: '70000.00',
+            currency: 'IDR',
+            status: 'draft',
+            created_at: '2026-08-15T00:00:00.000Z',
+          },
+          {
+            id: 'roy-2',
+            artist_id: artistId,
+            owner_id: artistOwnerId,
+            artist_name: 'Asep',
+            period_start: '2026-07-01',
+            period_end: '2026-07-31',
+            streams: 20000,
+            gross_revenue: '200000.00',
+            deductions: '60000.00',
+            net_royalty: '140000.00',
+            currency: 'IDR',
+            status: 'finalized',
+            created_at: '2026-07-15T00:00:00.000Z',
+          },
+        ],
+        total: 2,
+      };
+    },
+  };
+
+  const req = request('/api/royalties', 'GET', jwt(artistOwnerId, 'user'));
+  const res = await handleRoyalties(req, { JWT_SECRET: secret }, adapter, {});
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.success, true);
+  assert.equal(body.data.data.length, 2);
+
+  const draftItem = body.data.data.find((r) => r.id === 'roy-1');
+  const finalizedItem = body.data.data.find((r) => r.id === 'roy-2');
+  assert.equal(draftItem.status, 'estimated');
+  assert.equal(draftItem.amount, 70000);
+  assert.equal(finalizedItem.status, 'finalized');
+  assert.equal(finalizedItem.amount, 140000);
+});
+

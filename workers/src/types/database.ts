@@ -518,7 +518,11 @@ export interface DatabaseAdapter {
     totalUsers: number;
     totalReleases: number;
     totalStreams: number;
+    dspStreams?: number;
+    manualStreams?: number;
     totalRevenue: number;
+    dspReportedRevenue?: number;
+    allocatedArtistRoyalty?: number;
     pendingReviews: number;
     pendingWithdrawals: number;
   }>;

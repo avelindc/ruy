@@ -35,6 +35,7 @@ export default function AnalyticsPage() {
       setLoading(true);
 
       let apiStreaming: any[] = [];
+      let manualReportsList: any[] = [];
       if (user?.id) {
         const [streaming, royalties, artistReports] = await Promise.all([
           fetchApiStreaming(user.id),
@@ -42,8 +43,9 @@ export default function AnalyticsPage() {
           getArtistStreamingAggregates(user.id),
         ]);
         apiStreaming = streaming.data || [];
+        manualReportsList = artistReports.data || [];
         if (!royalties.error) setRoyaltyEntries(royalties.data || []);
-        if (!artistReports.error) setArtistStreamingReports(artistReports.data || []);
+        if (!artistReports.error) setArtistStreamingReports(manualReportsList);
       }
 
       const mappedApiStreaming: StreamingRecordItem[] = apiStreaming.map((s: any) => ({
@@ -58,7 +60,36 @@ export default function AnalyticsPage() {
         status: undefined,
         created_at: s.created_at || '',
       }));
-      setRecords(mappedApiStreaming);
+
+      const combinedReports: StreamingRecordItem[] = [...mappedApiStreaming];
+      // Anti-duplication: group manual reports by period
+      const byPeriod = new Map<string, any[]>();
+      for (const m of manualReportsList) {
+        const periodKey = m.period_start?.slice(0, 7) || 'all';
+        if (!byPeriod.has(periodKey)) byPeriod.set(periodKey, []);
+        byPeriod.get(periodKey)!.push(m);
+      }
+      for (const [periodKey, list] of byPeriod.entries()) {
+        const hasAggregate = list.some((r) => r.platform.toLowerCase() === 'agregat' || r.platform.toLowerCase() === 'all');
+        const itemsToUse = hasAggregate
+          ? list.filter((r) => r.platform.toLowerCase() === 'agregat' || r.platform.toLowerCase() === 'all')
+          : list;
+        itemsToUse.forEach((m) => {
+          combinedReports.push({
+            id: m.id,
+            user_id: user?.id || '',
+            artist_name: m.artist_name || '',
+            track_title: m.artist_name || 'Streaming Artis',
+            platform: m.platform || 'Agregat',
+            period: periodKey,
+            streams: Number(m.streams || 0),
+            royalty_usd: m.gross_revenue ? Number(m.gross_revenue) : 0,
+            status: undefined,
+            created_at: m.created_at || '',
+          });
+        });
+      }
+      setRecords(combinedReports);
     } catch (e) {
       console.error('Error loading analytics records:', e);
     } finally {

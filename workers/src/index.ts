@@ -792,7 +792,6 @@ export async function handleRoyalties(
         offset: 0,
       });
       records.push(...manualRoyalties.data
-        .filter((entry) => isAdmin || entry.status === 'finalized')
         .map((entry) => ({
           id: entry.id,
           owner_id: entry.owner_id,

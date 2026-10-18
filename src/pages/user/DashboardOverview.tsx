@@ -35,15 +35,16 @@ export default function DashboardOverview() {
           getUserArtists(user.id),
           getUserReleases(user.id),
           getWalletTransactions(user.id),
-          apiGet<any>('/api/artist-streaming-aggregates').catch(() => ({ success: false, data: { data: [] } })),
+          apiGet<any>('/api/streaming/aggregates?limit=100'),
         ]);
 
         if (artistsRes.error) throw artistsRes.error;
         if (releasesRes.error) throw releasesRes.error;
+        if (walletRes.error) throw walletRes.error;
 
-        // Process wallet balance from financial ledger
+        // Process wallet balance from financial ledger (only finalized transactions appear here)
         const summary = walletRes.summary || [];
-        let primaryBalanceText = '—';
+        let primaryBalanceText = 'Rp 0';
         let primaryBalanceNum = 0;
         if (summary.length > 0) {
           primaryBalanceText = summary
@@ -58,7 +59,7 @@ export default function DashboardOverview() {
           primaryBalanceNum = summary.reduce((sum: number, s: { balance: number }) => sum + Number(s.balance || 0), 0);
         }
 
-        // Process streams
+        // Process streams from artist streaming aggregates
         const streamRows: any[] = streamsRes.data?.data || [];
         const aggregateRows = streamRows.filter((r) => r.platform?.toLowerCase() === 'agregat' || r.platform?.toLowerCase() === 'all');
         const platformRows = streamRows.filter((r) => r.platform?.toLowerCase() !== 'agregat' && r.platform?.toLowerCase() !== 'all');
@@ -67,14 +68,15 @@ export default function DashboardOverview() {
           : platformRows.reduce((sum, r) => sum + Number(r.streams || 0), 0);
 
         setStats({
-          totalStreams: totalStreams > 0 ? totalStreams : null,
-          availableBalance: summary.length > 0 ? primaryBalanceNum : null,
+          totalStreams: totalStreams,
+          availableBalance: primaryBalanceNum,
           balanceFormatted: primaryBalanceText,
           totalArtists: artistsRes.data?.length || 0,
           totalReleases: releasesRes.data?.length || 0,
         });
       } catch (err) {
-        setError('Failed to load dashboard data');
+        const msg = err instanceof Error ? err.message : 'Gagal memuat data dashboard.';
+        setError(msg);
         console.error('Dashboard error:', err);
       } finally {
         setLoading(false);
